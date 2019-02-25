@@ -1184,6 +1184,23 @@ namespace dd
       {
 	this->_logger->error("failed determining mltype");
       }
+
+    //TODO CLEANUP
+    if (typeid(inputc) == typeid(CSVTSCaffeInputFileConn))
+      {
+        int blob_index = solver->net()->blob_names_index().at(std::string("scale_factor"));
+        float*scale_factor = solver->net()->blobs().at(blob_index)->mutable_cpu_data();
+        float step = 2.0/static_cast<float>(inputc._timesteps);
+        float val = 0;
+        for (int i=0; i<inputc._timesteps; ++i)
+          {
+            *scale_factor = val;
+            val += step;
+            scale_factor++;
+          }
+      }
+
+
     if (!inputc._dv.empty() || !inputc._dv_sparse.empty())
       {
 	this->_logger->info("filling up net prior to training");
@@ -2877,8 +2894,12 @@ namespace dd
         if (loss_scale_layer_param != NULL)
           {
             loss_scale_layer_param->mutable_scale_param()->mutable_filler()->
-              set_value(1.0/(float)_ntargets/(float)batch_size/(float)inputc._timesteps);
+              set_value(1.0/(float)_ntargets/(float)batch_size);
           }
+        caffe::LayerParameter *pp = find_layer_by_name(*np, "Loss_Pooling");
+        pp->mutable_pooling_param()->set_stride_h(inputc._timesteps/10/2);
+
+
       }
 
 
@@ -2999,6 +3020,9 @@ namespace dd
 		net_param.mutable_layer(1)->mutable_memory_data_param()->set_width(width);
 		net_param.mutable_layer(1)->mutable_memory_data_param()->set_height(height);
 	      }
+           caffe::LayerParameter *scale = find_layer_by_name(net_param,"Scale_Factor");
+           scale->mutable_input_param()->mutable_shape(0)->set_dim(0,timesteps);
+
 	  }
 	else
 	  {

@@ -347,25 +347,56 @@ namespace dd
                                         "Loss_Reduction","Reduction");
         caffe::ReductionParameter *rp = lparam->mutable_reduction_param();
         rp->set_operation(caffe::ReductionParameter::ASUM);
-        rp->set_axis(1);
+        //        rp->set_axis(1);
+        rp->set_axis(2);
         nsr = lparam->add_include();
         nsr->set_phase(caffe::TRAIN);
+
+        lparam = CaffeCommon::add_layer(this->_net_params, "", "scale_factor", "Scale_Factor", "Input");
+
+        caffe::BlobShape *bs = lparam->mutable_input_param()->add_shape();
+        bs->add_dim(1);
+        lparam->add_include()->set_phase(caffe::TRAIN);
+
 
         lparam = CaffeCommon::add_layer(this->_net_params,"summed_difference","scaled_difference",
                                         "Loss_Scale","Scale");
         caffe::ScaleParameter *sp = lparam->mutable_scale_param();
-        caffe::FillerParameter *fp = sp->mutable_filler();
-        fp->set_type("constant");
-        fp->set_value(1.0);
-        sp->set_axis(0);
-        sp->set_bias_term(false);
-        caffe::ParamSpec *ps = lparam->add_param();
-        ps->set_lr_mult(0.0);
-        ps->set_decay_mult(0.0);
+        lparam->add_bottom("scale_factor");
+        sp->set_axis(-1);
+        // caffe::FillerParameter *fp = sp->mutable_filler();
+        // fp->set_type("constant");
+        // fp->set_value(1.0);
+        // sp->set_axis(0);
+        // sp->set_bias_term(false);
+        // caffe::ParamSpec *ps = lparam->add_param();
+        // ps->set_lr_mult(0.0);
+        // ps->set_decay_mult(0.0);
         nsr = lparam->add_include();
         nsr->set_phase(caffe::TRAIN);
 
-        lparam = CaffeCommon::add_layer(this->_net_params,"scaled_difference","loss",
+        lparam = CaffeCommon::add_layer(this->_net_params,"scaled_difference","reshaped_difference",
+                                        "Loss_reshape","Reshape");
+        bs = lparam->mutable_reshape_param()->mutable_shape();
+        bs->add_dim(0);
+        bs->add_dim(1);
+        bs->add_dim(-1);
+        bs->add_dim(1);
+        lparam->add_include()->set_phase(caffe::TRAIN);
+
+
+        lparam = CaffeCommon::add_layer(this->_net_params,"reshaped_difference","pooled_difference",
+                                        "Loss_Pooling","Pooling");
+        caffe::PoolingParameter *pp = lparam->mutable_pooling_param();
+        pp->set_pool(caffe::PoolingParameter::MAX);
+        pp->set_kernel_h(10);
+        pp->set_kernel_w(1);
+        pp->set_stride_h(100/10/2);
+        pp->set_stride_w(1);
+        lparam->add_include()->set_phase(caffe::TRAIN);
+
+
+        lparam = CaffeCommon::add_layer(this->_net_params,"pooled_difference","loss",
                                         "Loss_Reduction_Batch","Reduction");
         rp = lparam->mutable_reduction_param();
         rp->set_operation(caffe::ReductionParameter::SUM);
