@@ -45,6 +45,19 @@ namespace dd
 #ifdef USE_CAFFE
   template class DeepDetect<CommandLineAPI>;
 #endif
+
+
+#ifdef USE_JSON_API
+#ifdef USE_COMMANDLINE
   template class DeepDetect<CommandLineJsonAPI>;
+#endif
+#ifdef USE_HTTP
   template class DeepDetect<HttpJsonAPI>;
+#endif
+  #if not defined(USE_COMMANDLINE) && not defined (USE_HTTP)
+    template class DeepDetect<JsonAPI>;
+  #endif
+#endif
+
+
 }
