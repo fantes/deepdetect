@@ -59,6 +59,22 @@ if (USE_NCNN)
     backends/ncnn/ncnnmodel.cc
   )
 endif()
+if (USE_TENSORRT)
+  protobuf_generate_cpp(PROTOCT_SRCS PROTOCT_HDRS backends/tensorrt/caffe.proto)
+  list(APPEND ddetect_SOURCES
+    ${PROTOCT_SRCS}
+    ${PROTOCT_HDRS}
+    backends/tensorrt/tensorrtlib.h
+    backends/tensorrt/tensorrtlib.cc
+    backends/tensorrt/protoUtils.h
+    backends/tensorrt/protoUtils.cc
+    backends/tensorrt/tensorrtinputconns.h
+    backends/tensorrt/tensorrtinputconns.cc
+    backends/tensorrt/tensorrtmodel.h
+    backends/tensorrt/tensorrtmodel.cc
+    )
+endif()
+
 add_library(ddetect ${ddetect_SOURCES})
 if (USE_NCNN)                                                                                 
   add_dependencies(ddetect ncnn)                                                              

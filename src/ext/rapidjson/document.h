@@ -36,8 +36,10 @@ RAPIDJSON_DIAG_OFF(4127) // conditional expression is constant
 #elif defined(__GNUC__)
 RAPIDJSON_DIAG_PUSH
 RAPIDJSON_DIAG_OFF(effc++)
+#if __GNUC__ >=6
+  RAPIDJSON_DIAG_OFF(terminate)
 #endif
-
+#endif
 ///////////////////////////////////////////////////////////////////////////////
 // RAPIDJSON_HAS_STDSTRING
 

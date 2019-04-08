@@ -6,6 +6,7 @@ option(USE_TF "use TF backend")
 option(USE_NCNN "use NCNN backend")
 option(USE_HDF5 "use HDF5" ON)
 option(USE_CAFFE "use Caffe backend" ON)
+option(USE_TENSORRT "use TensorRT backend" OFF)
 
 if (USE_CAFFE)
   add_definitions(-DUSE_CAFFE)
@@ -133,7 +134,14 @@ if (USE_CAFFE)
 else()
   set(USE_SIMSEARCH OFF)
 endif()
-  
+
+if (USE_TENSORRT)
+  add_definitions(-DUSE_TENSORRT)
+  message(STATUS "TensorRT backend requires CUDA + CUDNN, enabling GPU, CUDA and CUDNN")
+  set(USE_CPU_ONLY OFF)
+  set(USE_CUDNN ON)
+endif()
+
 # optional packages
 if (USE_CPU_ONLY)
   set(USE_CAFFE_CPU_ONLY ON)
@@ -160,6 +168,10 @@ if (CUDA_FOUND)
 else()
   set(CUDA_LIB_DEPS "")
   add_definitions(-DCPU_ONLY)
+  # if (USE_TENSORRT)
+  #   message(STATUS "Could not find CUDA, desabling TensorRT backend")
+  #   set(USE_TENSORRT OFF)
+  # endif()
 endif()
 
 if (USE_DLIB)
@@ -620,13 +632,36 @@ if (USE_NCNN)
   include_directories(${NCNN_INC_DIR})
 endif()
 
+if (USE_TENSORRT)
+  find_package(Protobuf REQUIRED)
+  include_directories(${Protobuf_INCLUDE_DIRS})
+  include_directories(${CMAKE_CURRENT_BINARY_DIR})
+  if (JETSON)
+    set(TENSORRT_LIB_DEPS /usr/lib/aarch64-linux-gnu/libprotobuf.so -lnvinfer -lnvparsers -lnvinfer_plugin -lnvonnxparser)
+    set(TENSORRT_LIB_DIR /usr/lib/aarch64-linux-gnu)
+    set(TENSORRT_INC_DIR /usr/include/aarch64-linux-gnu)
+    include_directories(${TENSORRT_INC_DIR})    
+  elseif(DEFINED TENSORRT_DIR)
+    set(TENSORRT_LIB_DEPS /usr/lib/x86_64-linux-gnu/libprotobuf.so -lnvinfer -lnvparsers -lnvinfer_plugin -lnvonnxparser)
+    set(TENSORRT_LIB_DIR ${TENSORRT_DIR}/lib)
+    set(TENSORRT_INC_DIR ${TENSORRT_DIR}/include)
+    include_directories(${TENSORRT_INC_DIR})
+  else()
+    set(TENSORRT_LIB_DEPS /usr/lib/x86_64-linux-gnu/libprotobuf.so -lnvinfer -lnvparsers -lnvinfer_plugin -lnvonnxparser)
+    set(TENSORRT_LIB_DIR /usr/lib/x86_64-linux-gnu)
+    set(TENSORRT_INC_DIR /usr/include/x86_64-linux-gnu)
+    include_directories(${TENSORRT_INC_DIR})    
+  endif()
+endif()
+
 # main library, main & tests
 include_directories ("${PROJECT_SOURCE_DIR}/src")
 add_subdirectory (src)
 
 # Flags used by the subdirectories
-set(COMMON_INCLUDE_DIRS ${Boost_INCLUDE_DIRS})
+set(COMMON_INCLUDE_DIRS ${Boost_INCLUDE_DIRS} ${CUDA_INCLUDE_DIRS})
 set(COMMON_LINK_DIRS
+  ${TENSORRT_LIB_DIR}
   ${CAFFE_LIB_DIR}
   ${CAFFE2_LIB_DIR}
   ${TF_LIB_DIR}
@@ -636,7 +671,7 @@ set(COMMON_LINK_DIRS
   ${DLIB_LIB_DIR})
 if (USE_HDF5)
   set(COMMON_LINK_LIBS
-    ddetect ${CUDA_LIB_DEPS} glog gflags ${OpenCV_LIBS} curlpp curl hdf5_cpp ${Boost_LIBRARIES} archive
+    ddetect ${TENSORRT_LIB_DEPS} ${CUDA_LIB_DEPS} glog gflags ${OpenCV_LIBS} curlpp curl hdf5_cpp ${Boost_LIBRARIES} archive
     ${CAFFE_LIB_DEPS}
     ${CAFFE2_LIB_DEPS}
     ${TF_LIB_DEPS}
@@ -646,7 +681,7 @@ if (USE_HDF5)
     ${DLIB_LIB_DEPS})
 else()
   set(COMMON_LINK_LIBS
-    ddetect ${CUDA_LIB_DEPS} glog gflags ${OpenCV_LIBS} curlpp curl ${Boost_LIBRARIES} archive
+    ddetect ${TENSORRT_LIB_DEPS} ${CUDA_LIB_DEPS} glog gflags ${OpenCV_LIBS} curlpp curl ${Boost_LIBRARIES} archive
     ${CAFFE_LIB_DEPS}
     ${CAFFE2_LIB_DEPS}
     ${TF_LIB_DEPS}
