@@ -32,6 +32,8 @@ namespace dd
   int fixProto(const std::string dest, const std::string source);
   int findNClasses(const std::string source, bool bbox);
   int findTopK(const std::string source);
+  int findTimeSteps(const std::string source);
+  int findAlphabetSize(const std::string source);
   bool TRTReadProtoFromTextFile(const char* filename, google::protobuf::Message* proto);
   bool TRTWriteProtoToTextFile(const google::protobuf::Message& proto, const char* filename);
 }

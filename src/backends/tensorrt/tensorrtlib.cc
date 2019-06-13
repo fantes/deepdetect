@@ -240,12 +240,13 @@ namespace dd
 	      }
 	  }
 	
-	if (_bbox == true)
+	if (_bbox)
 	  out_blob = "detection_out";
-	else if (_ctc == true)
+	else if (_ctc)
 	  {
 	    out_blob = "probs";
-	    throw MLLibBadParamException("ocr not yet implemented over tensorRT backend");
+	    _alphabet_size = findAlphabetSize(this->_mlmodel._def);
+	    _timesteps = findTimeSteps(this->_mlmodel._def);
 	  }
 	else if (_timeserie)
 	  {
@@ -312,6 +313,8 @@ namespace dd
 	      = caffeParser->parse(std::string(this->_mlmodel._repo + "/" +"net_tensorRT.proto").c_str(),
 				   this->_mlmodel._weights.c_str(),
 				   *network, _datatype);
+
+	    int addcode = addUnparsablesFromProto(network, this->_mlmodel._def, blobNameToTensor, this->_logger.get());
 	    
 	    network->markOutput(*blobNameToTensor->find(out_blob.c_str()));
 	    if (out_blob == "detection_out")
@@ -376,7 +379,10 @@ namespace dd
 	  }
 	else if (_ctc)
 	  {
-	    throw MLLibBadParamException("ocr not yet implemented over tensorRT backend");
+	    _buffers.resize(2);
+	    _floatOut.resize(_batch_size * _alphabet_size * _timesteps);
+	    cudaMalloc(&_buffers.data()[_inputIndex], _batch_size  * inputc._height * inputc._width * sizeof(float));
+	    cudaMalloc(&_buffers.data()[_outputIndex0], _batch_size * _alphabet_size * _timesteps * sizeof(float));     	    
 	  }
 	else if (_timeserie)
 	  {
@@ -436,7 +442,19 @@ namespace dd
 	  }
 	else if (_ctc)
 	  {
-	    throw MLLibBadParamException("ocr not yet implemented over tensorRT backend");
+	    if (inputc._bw)
+	      cudaMemcpyAsync(_buffers.data()[_inputIndex], inputc.data(),
+	       		      num_processed *  inputc._height * inputc._width * sizeof(float),
+	       		      cudaMemcpyHostToDevice, cstream);
+	    else
+	      cudaMemcpyAsync(_buffers.data()[_inputIndex], inputc.data(),
+			      num_processed * 3 * inputc._height * inputc._width * sizeof(float),
+			      cudaMemcpyHostToDevice, cstream);
+	    _context->enqueue(_batch_size, _buffers.data(), cstream, nullptr);
+	    cudaMemcpyAsync(_floatOut.data(), _buffers.data()[_outputIndex0],
+	     		    _batch_size * _alphabet_size * _timesteps * sizeof(float),
+	     		    cudaMemcpyDeviceToHost, cstream);
+	    cudaStreamSynchronize(cstream);
 	  }
 	else if (_timeserie)
 	  {
@@ -549,7 +567,50 @@ namespace dd
 	
 	else if (_ctc)
 	  {
-	    throw MLLibBadParamException("timeseries not yet implemented over tensorRT backend");
+	    const float *pred_data = _floatOut.data();
+	    // input is time_step x batch_size x alphabet_size
+	    
+	    for (int j=0;j<num_processed;j++)
+	      {
+		std::vector<int> pred_label_seq_with_blank(_timesteps);
+		std::vector<std::vector<float>> pred_sample;
+		
+		const float *pred_cur = pred_data;
+		pred_cur += j*_alphabet_size;
+		for (int t=0;t<_timesteps;t++)
+		  {
+		    pred_label_seq_with_blank[t] = std::max_element(pred_cur, pred_cur + _alphabet_size) - pred_cur;
+		    pred_cur += _batch_size * _alphabet_size;
+		  }
+		
+		// get labels seq
+		std::vector<int> pred_label_seq;
+		int prev = blank_label;
+		for(int l = 0; l < _timesteps; ++l)
+		  {
+		    int cur = pred_label_seq_with_blank[l];
+		    if(cur != prev && cur != blank_label)
+		      pred_label_seq.push_back(cur);
+		    prev = cur;
+		  }
+		APIData outseq;
+		std::string outstr;
+		std::ostringstream oss;
+		for (auto l: pred_label_seq)
+		  {
+		    outstr += char(std::atoi(this->_mlmodel.get_hcorresp(l).c_str()));
+		    //utf8::append(this->_mlmodel.get_hcorresp(l),outstr);
+		  }
+		std::vector<std::string> cats;
+		cats.push_back(outstr);
+		if (!inputc._ids.empty())
+		  outseq.add("uri",inputc._ids.at(idoffset+j));
+		else outseq.add("uri",std::to_string(idoffset+j));
+		outseq.add("cats",cats);
+		outseq.add("probs",std::vector<double>(1,1.0)); //XXX: in raw pred_label_seq_with_blank
+		outseq.add("loss",0.0);
+		vrad.push_back(outseq);		
+	      }
 	  }
 	else if (_timeserie)
 	  {
