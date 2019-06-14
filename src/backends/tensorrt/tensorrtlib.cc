@@ -81,6 +81,8 @@ namespace dd
     _outputIndex1 = tl._outputIndex1;
     _floatOut = tl._floatOut;
     _keepCount = tl._keepCount;
+    _alphabet_size = tl._alphabet_size;
+    _timesteps = tl._timesteps;
   }
 
   template <class TInputConnectorStrategy, class TOutputConnectorStrategy, class TMLModel>
@@ -254,12 +256,16 @@ namespace dd
 	    throw MLLibBadParamException("timeseries not yet implemented over tensorRT backend");
 	  } 
 
-	_nclasses = findNClasses(this->_mlmodel._def, _bbox);
+	if (!_ctc)
+	  {
+	    _nclasses = findNClasses(this->_mlmodel._def, _bbox);
+	    if (_nclasses <=0)
+	      this->_logger->error("cound not determine number of classes");
+	  }
+	
        if (_bbox)
          _top_k = findTopK(this->_mlmodel._def);
 
-	if (_nclasses <=0)
-	  this->_logger->error("cound not determine number of classes");
 	
 	bool engineRead = false;
 	
@@ -298,9 +304,12 @@ namespace dd
 	      {
 	      case 1:
 		this->_logger->error("TRT backend could not open model prototxt");
+		throw MLLibInternalException("TRT backend could not open model prototxt");
+
 		break;
 	      case 2:
 		this->_logger->error("TRT backend  could not write transformed model prototxt");
+		throw MLLibInternalException("TRT backend could not write transformed model prototxt");
 		break;
 	      default:
 		break;
@@ -314,7 +323,8 @@ namespace dd
 				   this->_mlmodel._weights.c_str(),
 				   *network, _datatype);
 
-	    int addcode = addUnparsablesFromProto(network, this->_mlmodel._def, blobNameToTensor, this->_logger.get());
+	    addUnparsablesFromProto(network, this->_mlmodel._def, this->_mlmodel._weights,
+				    blobNameToTensor, this->_logger.get());
 	    
 	    network->markOutput(*blobNameToTensor->find(out_blob.c_str()));
 	    if (out_blob == "detection_out")
@@ -380,9 +390,9 @@ namespace dd
 	else if (_ctc)
 	  {
 	    _buffers.resize(2);
-	    _floatOut.resize(_batch_size * _alphabet_size * _timesteps);
-	    cudaMalloc(&_buffers.data()[_inputIndex], _batch_size  * inputc._height * inputc._width * sizeof(float));
-	    cudaMalloc(&_buffers.data()[_outputIndex0], _batch_size * _alphabet_size * _timesteps * sizeof(float));     	    
+	    _floatOut.resize(_max_batch_size * _alphabet_size * _timesteps);
+	    cudaMalloc(&_buffers.data()[_inputIndex], _max_batch_size  * inputc._height * inputc._width * sizeof(float));
+	    cudaMalloc(&_buffers.data()[_outputIndex0], _max_batch_size * _alphabet_size * _timesteps * sizeof(float));     	    
 	  }
 	else if (_timeserie)
 	  {
@@ -450,9 +460,9 @@ namespace dd
 	      cudaMemcpyAsync(_buffers.data()[_inputIndex], inputc.data(),
 			      num_processed * 3 * inputc._height * inputc._width * sizeof(float),
 			      cudaMemcpyHostToDevice, cstream);
-	    _context->enqueue(_batch_size, _buffers.data(), cstream, nullptr);
+	    _context->enqueue(num_processed, _buffers.data(), cstream, nullptr);
 	    cudaMemcpyAsync(_floatOut.data(), _buffers.data()[_outputIndex0],
-	     		    _batch_size * _alphabet_size * _timesteps * sizeof(float),
+	     		    num_processed * _alphabet_size * _timesteps * sizeof(float),
 	     		    cudaMemcpyDeviceToHost, cstream);
 	    cudaStreamSynchronize(cstream);
 	  }
@@ -580,7 +590,7 @@ namespace dd
 		for (int t=0;t<_timesteps;t++)
 		  {
 		    pred_label_seq_with_blank[t] = std::max_element(pred_cur, pred_cur + _alphabet_size) - pred_cur;
-		    pred_cur += _batch_size * _alphabet_size;
+		    pred_cur += _max_batch_size * _alphabet_size;
 		  }
 		
 		// get labels seq

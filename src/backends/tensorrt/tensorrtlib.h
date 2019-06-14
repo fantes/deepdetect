@@ -131,6 +131,8 @@ namespace dd
 
     bool _bbox = false;
     bool _ctc = false;
+    int _alphabet_size = -1;
+    int _timesteps = -1;
     
     std::vector<void*> _buffers;
 

@@ -25,7 +25,11 @@
 
 #include <google/protobuf/io/coded_stream.h>                                                            
 #include <google/protobuf/io/zero_copy_stream_impl.h>                                                   
-#include <google/protobuf/text_format.h>                                                                
+#include <google/protobuf/text_format.h>
+#include <spdlog/spdlog.h>
+#include "NvInfer.h"
+#include "NvCaffeParser.h"
+#include "src/caffe.pb.h"
 
 namespace dd
 {
@@ -34,7 +38,15 @@ namespace dd
   int findTopK(const std::string source);
   int findTimeSteps(const std::string source);
   int findAlphabetSize(const std::string source);
+  std::string firstLSTMInput(caffe::NetParameter &source_net);
+  bool TRTReadProtoFromBinaryFile(const char* filename, google::protobuf::Message* proto);
   bool TRTReadProtoFromTextFile(const char* filename, google::protobuf::Message* proto);
   bool TRTWriteProtoToTextFile(const google::protobuf::Message& proto, const char* filename);
+  nvinfer1::ILayer* findLayerByName(const nvinfer1::INetworkDefinition* network, const std::string lname);    
+  void addUnparsablesFromProto(nvinfer1::INetworkDefinition* network, const std::string source,
+			       const std::string binary_proto, 
+			      const nvcaffeparser1::IBlobNameToTensor* b2t,
+			      spdlog::logger* logger);
+
 }
 #endif
