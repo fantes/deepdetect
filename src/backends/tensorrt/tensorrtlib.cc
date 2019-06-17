@@ -298,8 +298,10 @@ namespace dd
 	
 	if (!engineRead)
 	  {
-
-	    int fixcode = fixProto(this->_mlmodel._repo + "/" +"net_tensorRT.proto", this->_mlmodel._def);
+	    std::vector<int> unparsable;
+	    std::vector<int> tofix;
+	    std::vector<std::string> removedOutputs;
+	    int fixcode = fixProto(this->_mlmodel._repo + "/" +"net_tensorRT.proto", this->_mlmodel._def,unparsable,tofix,removedOutputs);
 	    switch(fixcode)
 	      {
 	      case 1:
@@ -322,10 +324,11 @@ namespace dd
 	      = caffeParser->parse(std::string(this->_mlmodel._repo + "/" +"net_tensorRT.proto").c_str(),
 				   this->_mlmodel._weights.c_str(),
 				   *network, _datatype);
-
-	    addUnparsablesFromProto(network, this->_mlmodel._def, this->_mlmodel._weights,
-				    blobNameToTensor, this->_logger.get());
-	    
+	    std::map<std::string, nvinfer1::ITensor*> t2t;
+	    addUnparsablesFromProto(network, this->_mlmodel._def, unparsable, this->_mlmodel._weights,
+				    blobNameToTensor, t2t, this->_logger.get());
+	    matchInputs(network, this->_mlmodel._def, tofix, this->_mlmodel._weights,
+			blobNameToTensor, t2t, removedOutputs, this->_logger.get());
 	    network->markOutput(*blobNameToTensor->find(out_blob.c_str()));
 	    if (out_blob == "detection_out")
 	      network->markOutput(*blobNameToTensor->find("keep_count"));

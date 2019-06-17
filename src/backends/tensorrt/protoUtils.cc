@@ -124,15 +124,27 @@ nvinfer1::ILayer* findLayerByName(const nvinfer1::INetworkDefinition* network, c
   return nullptr;
 }
 
+void matchInputs(nvinfer1::INetworkDefinition* network, const std::string source_proto,
+		 std::vector<int> tofix,
+		 const std::string binary_proto,
+		 const nvcaffeparser1::IBlobNameToTensor* b2t,
+		 std::map<std::string, nvinfer1::ITensor*>& t2t,
+		 std::vector<std::string> removedOutputs,
+		 spdlog::logger* logger)
+{
+  //TODO
+}
+
   
 void addUnparsablesFromProto(nvinfer1::INetworkDefinition* network, const std::string source_proto,
+			     std::vector<int> unparsable,
 			     const std::string binary_proto,
 			    const nvcaffeparser1::IBlobNameToTensor* b2t,
+			     std::map<std::string, nvinfer1::ITensor*>& t2t,
 			    spdlog::logger* logger)
 {
   caffe::NetParameter source_net;
   caffe::NetParameter binary_net;
-  std::map<std::string, nvinfer1::ITensor*> t2t;
   if (!TRTReadProtoFromTextFile(source_proto.c_str(),&source_net))
     logger->error("TRT could read source protofile {}", source_proto);
   throw MLLibInternalException("TRT could read source protofile");
@@ -142,7 +154,7 @@ void addUnparsablesFromProto(nvinfer1::INetworkDefinition* network, const std::s
   int lstm_index = 0;
   int seq_size = -1;
   nvinfer1::ITensor * inputTensor = nullptr;
-  for (int i =0; i<source_net.layers_size(); ++i)
+  for (int i : unparsable)
     {
       caffe::LayerParameter lparam = source_net.layer(i);
       if (lparam.type() == "ContinuationIndicator")
@@ -252,7 +264,8 @@ std::vector<int> inputInList(caffe::LayerParameter&lparam, std::vector<std::stri
   return inList;
 }
 
-int fixProto(const std::string dest, const std::string source)
+
+int fixProto(const std::string dest, const std::string source,std::vector<int>&unparsable, std::vector<int>&tofix, std::vector<std::string> & removedOutputs)
 {
   caffe::NetParameter source_net;
   caffe::NetParameter dest_net;
@@ -260,7 +273,6 @@ int fixProto(const std::string dest, const std::string source)
     return 1;
 
   dest_net.set_name(source_net.name());
-  std::vector<std::string> lstmOutputs;
   std::string rootInputName;
   
   for (int i =0; i<source_net.layer_size(); ++i)
@@ -316,28 +328,28 @@ int fixProto(const std::string dest, const std::string source)
 	}
       else if (lparam.type() == "ContinuationIndicator")
 	{
+	  unparsable.push_back(i);
 	  // simply skip this layer
 	}
       else if (lparam.type() == "LSTM")
 	{
-	  lstmOutputs.push_back(lparam.top(0));
+	  unparsable.push_back(i);
+	  removedOutputs.push_back(lparam.top(0));
 	}
-      else
+      else 
 	{
 	  caffe::LayerParameter* dlparam = dest_net.add_layer();
 	  *dlparam = lparam;
-	  std::vector<int> orphanedInputs = inputInList(lparam, lstmOutputs);
-	  if (orphanedInputs.size() !=0)
+	  std::vector<int> inputsInRemoved = inputInList(lparam, removedOutputs);
+	  if (inputsInRemoved.size() != 0)
 	    {
-	      for (int s:orphanedInputs)
-		{
-		  dlparam->set_bottom(s,rootInputName);
-		}
+	      // add fake input
+	      // find sizes in binary proto
+	      // TODO
+	      // add to tofixlist
+	      tofix.push_back(i);
 	    }
-	
 	}
-
-      
     }
 
   
