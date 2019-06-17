@@ -301,7 +301,10 @@ namespace dd
 	    std::vector<int> unparsable;
 	    std::vector<int> tofix;
 	    std::vector<std::string> removedOutputs;
-	    int fixcode = fixProto(this->_mlmodel._repo + "/" +"net_tensorRT.proto", this->_mlmodel._def,unparsable,tofix,removedOutputs);
+	    std::string rootInputName;
+	    int fixcode = fixProto(this->_mlmodel._repo + "/" +"net_tensorRT.proto",
+				   this->_mlmodel._def,unparsable,tofix,removedOutputs,
+				   rootInputName, this->_mlmodel._weights);
 	    switch(fixcode)
 	      {
 	      case 1:
@@ -312,6 +315,10 @@ namespace dd
 	      case 2:
 		this->_logger->error("TRT backend  could not write transformed model prototxt");
 		throw MLLibInternalException("TRT backend could not write transformed model prototxt");
+		break;
+	      case 3:
+		this->_logger->error("TRT backend  could not open weights prototxt");
+		throw MLLibInternalException("TRT backend could not open weights prototxt");
 		break;
 	      default:
 		break;

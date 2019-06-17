@@ -32,15 +32,6 @@
 #include "mllibstrategy.h"
 
 
-using google::protobuf::io::FileInputStream;                                                            
-using google::protobuf::io::FileOutputStream;                                                           
-using google::protobuf::io::ZeroCopyInputStream;                                                        
-using google::protobuf::io::CodedInputStream;                                                           
-using google::protobuf::io::ZeroCopyOutputStream;                                                       
-using google::protobuf::io::CodedOutputStream;                                                          
-
-
-
 namespace dd
 {
 
@@ -265,15 +256,21 @@ std::vector<int> inputInList(caffe::LayerParameter&lparam, std::vector<std::stri
 }
 
 
-int fixProto(const std::string dest, const std::string source,std::vector<int>&unparsable, std::vector<int>&tofix, std::vector<std::string> & removedOutputs)
+int fixProto(const std::string dest, const std::string source,std::vector<int>&unparsable, std::vector<int>&tofix, std::vector<std::string> & removedOutputs, std::string& rootInputName, const std::string binary_proto)
 {
   caffe::NetParameter source_net;
   caffe::NetParameter dest_net;
+
+  int timesteps;
+  caffe::NetParameter binary_net;
+  if (!TRTReadProtoFromBinaryFile(binary_proto.c_str(),&binary_net))
+    return 3;
+
+
   if (!TRTReadProtoFromTextFile(source.c_str(),&source_net))
     return 1;
 
   dest_net.set_name(source_net.name());
-  std::string rootInputName;
   
   for (int i =0; i<source_net.layer_size(); ++i)
     {
@@ -329,12 +326,23 @@ int fixProto(const std::string dest, const std::string source,std::vector<int>&u
       else if (lparam.type() == "ContinuationIndicator")
 	{
 	  unparsable.push_back(i);
+	  timesteps = lparam.continuation_indicator_param().time_step();
 	  // simply skip this layer
 	}
       else if (lparam.type() == "LSTM")
 	{
 	  unparsable.push_back(i);
 	  removedOutputs.push_back(lparam.top(0));
+	  // add fake input
+	  dest_net.add_input(lparam.top(0));
+	  caffe::BlobShape* is = dest_net.add_input_shape();
+	  const caffe::LayerParameter& binlayer = binary_net.layer(i);
+	  const caffe::BlobProto& weight_blob = binlayer.blobs(0);
+	  int num_out = lparam.recurrent_param().num_output();
+	  int datasize = weight_blob.data_size() / num_out / 4;
+	  is->add_dim(1); // bs will be overriden
+	  is->add_dim(timesteps);
+	  is->add_dim(datasize);
 	}
       else 
 	{
@@ -342,13 +350,7 @@ int fixProto(const std::string dest, const std::string source,std::vector<int>&u
 	  *dlparam = lparam;
 	  std::vector<int> inputsInRemoved = inputInList(lparam, removedOutputs);
 	  if (inputsInRemoved.size() != 0)
-	    {
-	      // add fake input
-	      // find sizes in binary proto
-	      // TODO
-	      // add to tofixlist
 	      tofix.push_back(i);
-	    }
 	}
     }
 
@@ -364,8 +366,10 @@ bool TRTReadProtoFromBinaryFile(const char* filename, google::protobuf::Message*
   int fd = open(filename, O_RDONLY);
   if (fd == -1)
     return false;
-  ZeroCopyInputStream* raw_input = new FileInputStream(fd);
-  CodedInputStream* coded_input = new CodedInputStream(raw_input);
+  google::protobuf::io::ZeroCopyInputStream* raw_input =
+    new google::protobuf::io::FileInputStream(fd);
+  google::protobuf::io::CodedInputStream* coded_input =
+    new google::protobuf::io::CodedInputStream(raw_input);
   coded_input->SetTotalBytesLimit(INT_MAX, 536870912);
 
   bool success = proto->ParseFromCodedStream(coded_input);
@@ -382,7 +386,7 @@ bool TRTReadProtoFromBinaryFile(const char* filename, google::protobuf::Message*
   int fd = open(filename, O_RDONLY);
   if (fd == -1)
     return false;
-  FileInputStream* input = new FileInputStream(fd);                                                     
+  google::protobuf::io::FileInputStream* input = new google::protobuf::io::FileInputStream(fd);                                                     
   bool success = google::protobuf::TextFormat::Parse(input, proto);                                     
   delete input;                                                                                         
   close(fd);                                                                                            
@@ -394,7 +398,7 @@ bool TRTReadProtoFromBinaryFile(const char* filename, google::protobuf::Message*
   int fd = open(filename, O_WRONLY | O_CREAT | O_TRUNC, 0644);
   if (fd == -1)
     return false;
-  FileOutputStream* output = new FileOutputStream(fd);
+  google::protobuf::io::FileOutputStream* output = new google::protobuf::io::FileOutputStream(fd);
   bool success = google::protobuf::TextFormat::Print(proto, output);
   delete output;                                                                                        
   close(fd);

@@ -33,7 +33,7 @@
 
 namespace dd
 {
-  int fixProto(const std::string dest, const std::string source, std::vector<int> unparsable, std::vector<int>tofix, std::vector<std::string>& removedOutputs);
+  int fixProto(const std::string dest, const std::string source, std::vector<int>& unparsable, std::vector<int>&tofix, std::vector<std::string>& removedOutputs, std::string& rootInputName, const std::string binary_proto);
   int findNClasses(const std::string source, bool bbox);
   int findTopK(const std::string source);
   int findTimeSteps(const std::string source);
