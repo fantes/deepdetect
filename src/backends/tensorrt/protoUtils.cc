@@ -115,33 +115,72 @@ nvinfer1::ILayer* findLayerByName(const nvinfer1::INetworkDefinition* network, c
   return nullptr;
 }
 
-void matchInputs(nvinfer1::INetworkDefinition* network, const std::string source_proto,
-		 std::vector<int> tofix,
-		 const std::string binary_proto,
-		 const nvcaffeparser1::IBlobNameToTensor* b2t,
-		 std::map<std::string, nvinfer1::ITensor*>& t2t,
-		 std::vector<std::string> removedOutputs,
-		 spdlog::logger* logger)
-{
-  //TODO
-}
+  nvinfer1::ITensor* findInputTensorByName(const nvinfer1::INetworkDefinition* network, const std::string name)
+  {
+    for (int i=0; i<network->getNbInputs(); ++i)
+      {
+        nvinfer1::ITensor* it = network->getInput(i);
+        if (it->getName() == name)
+          return it;
+      }
+    return nullptr;
+  }
 
-  
-void addUnparsablesFromProto(nvinfer1::INetworkDefinition* network, const std::string source_proto,
-			     std::vector<int> unparsable,
-			     const std::string binary_proto,
-			    const nvcaffeparser1::IBlobNameToTensor* b2t,
-			     std::map<std::string, nvinfer1::ITensor*>& t2t,
-			    spdlog::logger* logger)
+  void visualizeNet(const nvinfer1::INetworkDefinition* network)
+  {
+    std::cout << "inputs: " << std::endl;
+    for (int i=0; i< network->getNbInputs(); ++i)
+      std::cout << "   " << network->getInput(i)->getName() << std::endl;
+    for (int i=0; i< network->getNbLayers(); ++i)
+      {
+        nvinfer1::ILayer* l = network->getLayer(i);
+        int nin = l->getNbInputs();
+        int nout = l->getNbOutputs();
+        std::string name(l->getName());
+        std::cout << "layer " << i << " " << name
+                  << " i:" << nin  << " o:" << nout << std::endl;
+        if (name.find("lstm")!=name.npos)
+          {
+            nin = 1;
+            nout = 1;
+          }
+        for (int j=0; j< nin; ++j)
+          {
+            std::cout << "     input " << j << " " << l->getInput(j)->getName() << std::endl;
+          }
+        for (int j=0; j< nout; ++j)
+          {
+            std::cout << "     output " << j << " " << l->getOutput(j)->getName() << std::endl;
+          }
+      }
+
+  }
+
+
+void addUnparsablesFromProto(nvinfer1::INetworkDefinition* network,
+                             const std::string& source_proto,
+                             const std::string& binary_proto,
+                             std::vector<int>& unparsable,
+                             std::map<int,std::vector<int>>& tofix,
+                             std::vector<std::string>& removedOutputs,
+                             std::string& rooInputName,
+                             const nvcaffeparser1::IBlobNameToTensor* b2t,
+                             spdlog::logger* logger)
 {
   caffe::NetParameter source_net;
   caffe::NetParameter binary_net;
   if (!TRTReadProtoFromTextFile(source_proto.c_str(),&source_net))
-    logger->error("TRT could read source protofile {}", source_proto);
-  throw MLLibInternalException("TRT could read source protofile");
-  if (!TRTReadProtoFromBinaryFile(source_proto.c_str(),&binary_net))
-    logger->error("TRT could read net weights {}", binary_proto);
-  throw MLLibInternalException("TRT could read net weights");
+    {
+      logger->error("TRT could read source protofile {}", source_proto);
+      throw MLLibInternalException("TRT could read source protofile");
+    }
+  if (!TRTReadProtoFromBinaryFile(binary_proto.c_str(),&binary_net))
+    {
+      logger->error("TRT could read net weights {}", binary_proto);
+      throw MLLibInternalException("TRT could read net weights");
+    }
+
+  std::map<std::string, nvinfer1::ITensor*> t2t;
   int lstm_index = 0;
   int seq_size = -1;
   nvinfer1::ITensor * inputTensor = nullptr;
@@ -149,87 +188,112 @@ void addUnparsablesFromProto(nvinfer1::INetworkDefinition* network, const std::s
     {
       caffe::LayerParameter lparam = source_net.layer(i);
       if (lparam.type() == "ContinuationIndicator")
-	{
-	  seq_size = lparam.continuation_indicator_param().time_step();
-	}
+        {
+          seq_size = lparam.continuation_indicator_param().time_step();
+        }
       else if (lparam.type() == "LSTM")
-	{
-	  if (lstm_index == 0)
-	    inputTensor = b2t->find(lparam.bottom(0).c_str());
-	  int num_out = lparam.recurrent_param().num_output();
-	  auto rnn = network->addRNNv2(*inputTensor, 1, num_out, seq_size, nvinfer1::RNNOperation::kLSTM);
-	  const caffe::LayerParameter & binlayer = binary_net.layer(i);
-	  const caffe::BlobProto& weight_blob = binlayer.blobs(0);
-	  std::cout << "number of blobs in lstm layer: " << binlayer.blobs_size() << std::endl;
-	  
-	  int datasize = weight_blob.data_size() / num_out / 4;
-	  
-	  const float * weights = weight_blob.data().data();
-	   
-	  std::vector<float> zeros(num_out, 0.0);
-	  nvinfer1::Weights iww{nvinfer1::DataType::kFLOAT,weights,num_out * datasize};
-	  nvinfer1::Weights iwr{nvinfer1::DataType::kFLOAT,weights,num_out * datasize};
-	  nvinfer1::Weights ibw{nvinfer1::DataType::kFLOAT,weights,num_out};
-	  nvinfer1::Weights ibr{nvinfer1::DataType::kFLOAT,zeros.data(),num_out};
-	  nvinfer1::Weights fww{nvinfer1::DataType::kFLOAT,weights,num_out * datasize};
-	  nvinfer1::Weights fwr{nvinfer1::DataType::kFLOAT,weights,num_out * datasize};
-	  nvinfer1::Weights fbw{nvinfer1::DataType::kFLOAT,weights,num_out};
-	  nvinfer1::Weights fbr{nvinfer1::DataType::kFLOAT,zeros.data(),num_out};
-	  nvinfer1::Weights oww{nvinfer1::DataType::kFLOAT,weights,num_out * datasize};
-	  nvinfer1::Weights owr{nvinfer1::DataType::kFLOAT,weights,num_out * datasize};
-	  nvinfer1::Weights obw{nvinfer1::DataType::kFLOAT,weights,num_out};
-	  nvinfer1::Weights obr{nvinfer1::DataType::kFLOAT,zeros.data(),num_out};
-	  nvinfer1::Weights cww{nvinfer1::DataType::kFLOAT,weights,num_out * datasize};
-	  nvinfer1::Weights cwr{nvinfer1::DataType::kFLOAT,weights,num_out * datasize};
-	  nvinfer1::Weights cbw{nvinfer1::DataType::kFLOAT,weights,num_out};
-	  nvinfer1::Weights cbr{nvinfer1::DataType::kFLOAT,zeros.data(),num_out};
+        {
+          if (lstm_index == 0)
+            {
+              inputTensor = b2t->find(lparam.bottom(0).c_str());
+              std::cout << "LSTM i0 found input tensor in caffe parsed "
+                         << inputTensor->getName() << std::endl;
+            }
+          else
+            {
+              inputTensor = t2t[lparam.bottom(0)];
+              std::cout << "LSTM " << lstm_index << " found input tensor in newly added ones "
+                         << inputTensor->getName() << std::endl;
+            }
+          int num_out = lparam.recurrent_param().num_output();
+          nvinfer1::IRNNv2Layer * rnn = network->addRNNv2(*inputTensor, 1, num_out, seq_size, nvinfer1::RNNOperation::kLSTM);
+          std::stringstream n;
+          n<< "lstm" << lstm_index;
+          rnn->setName(n.str().c_str());
+          const caffe::LayerParameter * binlayer = findLayerByName(binary_net,lparam.name());
+          const caffe::BlobProto& weight_blob = binlayer->blobs(0);
+          std::cout << "number of blobs in lstm layer: " << binlayer->blobs_size() << std::endl;
 
-	  rnn->setWeightsForGate(0, nvinfer1::RNNGateType::kINPUT, true, iww);
-	  rnn->setBiasForGate(0, nvinfer1::RNNGateType::kINPUT, true, ibw);
-	  rnn->setWeightsForGate(0, nvinfer1::RNNGateType::kINPUT, false, iwr);
-	  rnn->setBiasForGate(0, nvinfer1::RNNGateType::kINPUT, false, ibr);
+          int datasize = weight_blob.data_size() / num_out / 4;
 
-	  rnn->setWeightsForGate(0, nvinfer1::RNNGateType::kFORGET, true, fww);
-	  rnn->setBiasForGate(0, nvinfer1::RNNGateType::kFORGET, true, fbw);
-	  rnn->setWeightsForGate(0, nvinfer1::RNNGateType::kFORGET, false, fwr);
-	  rnn->setBiasForGate(0, nvinfer1::RNNGateType::kFORGET, false, fbr);
+          const float * weights = weight_blob.data().data();
+
+          std::vector<float> zeros(num_out, 0.0);
+          nvinfer1::Weights iww{nvinfer1::DataType::kFLOAT,weights,num_out * datasize};
+          nvinfer1::Weights iwr{nvinfer1::DataType::kFLOAT,weights,num_out * datasize};
+          nvinfer1::Weights ibw{nvinfer1::DataType::kFLOAT,weights,num_out};
+          nvinfer1::Weights ibr{nvinfer1::DataType::kFLOAT,zeros.data(),num_out};
+          nvinfer1::Weights fww{nvinfer1::DataType::kFLOAT,weights,num_out * datasize};
+          nvinfer1::Weights fwr{nvinfer1::DataType::kFLOAT,weights,num_out * datasize};
+          nvinfer1::Weights fbw{nvinfer1::DataType::kFLOAT,weights,num_out};
+          nvinfer1::Weights fbr{nvinfer1::DataType::kFLOAT,zeros.data(),num_out};
+          nvinfer1::Weights oww{nvinfer1::DataType::kFLOAT,weights,num_out * datasize};
+          nvinfer1::Weights owr{nvinfer1::DataType::kFLOAT,weights,num_out * datasize};
+          nvinfer1::Weights obw{nvinfer1::DataType::kFLOAT,weights,num_out};
+          nvinfer1::Weights obr{nvinfer1::DataType::kFLOAT,zeros.data(),num_out};
+          nvinfer1::Weights cww{nvinfer1::DataType::kFLOAT,weights,num_out * datasize};
+          nvinfer1::Weights cwr{nvinfer1::DataType::kFLOAT,weights,num_out * datasize};
+          nvinfer1::Weights cbw{nvinfer1::DataType::kFLOAT,weights,num_out};
+          nvinfer1::Weights cbr{nvinfer1::DataType::kFLOAT,zeros.data(),num_out};
+
+          rnn->setWeightsForGate(0, nvinfer1::RNNGateType::kINPUT, true, iww);
+          rnn->setBiasForGate(0, nvinfer1::RNNGateType::kINPUT, true, ibw);
+          rnn->setWeightsForGate(0, nvinfer1::RNNGateType::kINPUT, false, iwr);
+          rnn->setBiasForGate(0, nvinfer1::RNNGateType::kINPUT, false, ibr);
+
+          rnn->setWeightsForGate(0, nvinfer1::RNNGateType::kFORGET, true, fww);
+          rnn->setBiasForGate(0, nvinfer1::RNNGateType::kFORGET, true, fbw);
+          rnn->setWeightsForGate(0, nvinfer1::RNNGateType::kFORGET, false, fwr);
+          rnn->setBiasForGate(0, nvinfer1::RNNGateType::kFORGET, false, fbr);
 
 
-	  rnn->setWeightsForGate(0, nvinfer1::RNNGateType::kOUTPUT, true, oww);
-	  rnn->setBiasForGate(0, nvinfer1::RNNGateType::kOUTPUT, true, obw);
-	  rnn->setWeightsForGate(0, nvinfer1::RNNGateType::kOUTPUT, false, owr);
-	  rnn->setBiasForGate(0, nvinfer1::RNNGateType::kOUTPUT, false, obr);
+          rnn->setWeightsForGate(0, nvinfer1::RNNGateType::kOUTPUT, true, oww);
+          rnn->setBiasForGate(0, nvinfer1::RNNGateType::kOUTPUT, true, obw);
+          rnn->setWeightsForGate(0, nvinfer1::RNNGateType::kOUTPUT, false, owr);
+          rnn->setBiasForGate(0, nvinfer1::RNNGateType::kOUTPUT, false, obr);
 
-	  rnn->setWeightsForGate(0, nvinfer1::RNNGateType::kCELL, true, cww);
-	  rnn->setBiasForGate(0, nvinfer1::RNNGateType::kCELL, true, cbw);
-	  rnn->setWeightsForGate(0, nvinfer1::RNNGateType::kCELL, false, cwr);
-	  rnn->setBiasForGate(0, nvinfer1::RNNGateType::kCELL, false, cbr);
+          rnn->setWeightsForGate(0, nvinfer1::RNNGateType::kCELL, true, cww);
+          rnn->setBiasForGate(0, nvinfer1::RNNGateType::kCELL, true, cbw);
+          rnn->setWeightsForGate(0, nvinfer1::RNNGateType::kCELL, false, cwr);
+          rnn->setBiasForGate(0, nvinfer1::RNNGateType::kCELL, false, cbr);
 
-	  std::string out = lparam.top(0);
-	  inputTensor = rnn->getOutput(0);
-	  t2t.insert(std::pair<std::string,nvinfer1::ITensor*>(out, inputTensor));
-	  lstm_index++;
-	}
+          std::string out = lparam.top(0);
+          nvinfer1::ITensor* loutput = rnn->getOutput(0);
+          std::string out_real = out + "_real";
+          loutput->setName(out_real.c_str());
+          std::cout << "adding ouput tensor " << loutput->getName() << " to t2t" << std::endl;
+          t2t.insert(std::pair<std::string,nvinfer1::ITensor*>(out, loutput));
+          lstm_index++;
+        }
       else
-	{
-	  for (int b = 0; b< lparam.bottom_size(); ++b)
-	    {
-	      std::map<std::string, nvinfer1::ITensor*>::iterator it = t2t.find(lparam.bottom(b));
-	      if (it != t2t.end())
-		{
-		  // first find layer in already translated ones
-		  nvinfer1::ILayer * atl = findLayerByName(network, lparam.name());
-		  if (atl == nullptr)
-		    {
-		      logger->error("could not find layer {} for replacing input {} with output of manulaly created layer", lparam.name(), lparam.bottom(b));
-		      throw MLLibInternalException("fatal error while creating network from caffe parser + manually adding layers");
-		    }
-		  // then update its input with ouput from manually inserter layer
-		  atl->setInput(b,*(it->second));
-		}
-	    }
-	}
+        {
+          logger->error("unknow unparsable layer {} of type {}", lparam.name(), lparam.type());
+          throw MLLibInternalException("fatal while trying to manually add layer");
+        }
     }
+  for (auto const& tf: tofix)
+    {
+      caffe::LayerParameter lparam = source_net.layer(tf.first);
+      std::cout << "fixing layer " << tf.first << " " << lparam.name() << std::endl;
+      for (int j: tf.second)
+        {
+          std::string bname = lparam.bottom(j);
+          nvinfer1::ILayer* il = findLayerByName(network, lparam.name());
+          il->setInput(j,*(t2t[bname]));
+          std::cout << "fixing input " << bname << " of layer " << lparam.name() << " with " << t2t[bname]->getName() << std::endl;
+        }
+    }
+  for (std::string ro : removedOutputs)
+    {
+      nvinfer1::ITensor* it = findInputTensorByName(network, ro);
+      if (it != nullptr)
+        {
+          std::cout << "removing fake input " << ro << std::endl;
+          network->removeTensor(*it);
+        }
+    }
+
+  visualizeNet(network);
 }
 
 
@@ -246,7 +310,7 @@ std::string firstLSTMInput(caffe::NetParameter &source_net)
   return std::string("");
 }
 
-std::vector<int> inputInList(caffe::LayerParameter&lparam, std::vector<std::string>list)
+std::vector<int> inputInList(const caffe::LayerParameter&lparam, std::vector<std::string>list)
 {
   std::vector<int> inList;
   for (int i =0; i< lparam.bottom_size(); ++i)
@@ -255,8 +319,19 @@ std::vector<int> inputInList(caffe::LayerParameter&lparam, std::vector<std::stri
   return inList;
 }
 
+caffe::LayerParameter* findLayerByName(caffe::NetParameter& net, const std::string name)
+{
+  for (int i=0; i< net.layer_size(); ++i)
+    {
+      caffe::LayerParameter*lparam = net.mutable_layer(i);
+      if (lparam->name() == name)
+        return lparam;
+    }
+  return nullptr;
+}
 
-int fixProto(const std::string dest, const std::string source,std::vector<int>&unparsable, std::vector<int>&tofix, std::vector<std::string> & removedOutputs, std::string& rootInputName, const std::string binary_proto)
+
+  int fixProto(const std::string dest, const std::string source,std::vector<int>&unparsable, std::map<int,std::vector<int>>&tofix, std::vector<std::string> & removedOutputs, std::string& rootInputName, const std::string binary_proto)
 {
   caffe::NetParameter source_net;
   caffe::NetParameter dest_net;
@@ -275,83 +350,89 @@ int fixProto(const std::string dest, const std::string source,std::vector<int>&u
   for (int i =0; i<source_net.layer_size(); ++i)
     {
       caffe::LayerParameter lparam = source_net.layer(i);
+
       if (lparam.type() == "Permute")
-	{
-	  if (lparam.top(0) == firstLSTMInput(source_net))
-	    {
-	      caffe::PermuteParameter* pp = lparam.mutable_permute_param();
-	      int oldo0 = pp->order(0);
-	      pp->set_order(0,pp->order(1));
-	      pp->set_order(1,oldo0);
-	    }
-	  caffe::LayerParameter* dlparam = dest_net.add_layer();
-	  *dlparam = lparam;
-	}
+        {
+          if (lparam.top(0) == firstLSTMInput(source_net))
+            {
+              caffe::PermuteParameter* pp = lparam.mutable_permute_param();
+              int oldo0 = pp->order(0);
+              pp->set_order(0,pp->order(1));
+              pp->set_order(1,oldo0);
+            }
+          caffe::LayerParameter* dlparam = dest_net.add_layer();
+          *dlparam = lparam;
+        }
       else if (lparam.type() == "MemoryData")
-	{
-	  rootInputName = lparam.top(0);
-	  dest_net.add_input(rootInputName);
-	  caffe::BlobShape* is = dest_net.add_input_shape();
-	  is->add_dim(lparam.memory_data_param().batch_size());
-	  is->add_dim(lparam.memory_data_param().channels());
-	  is->add_dim(lparam.memory_data_param().height());
-	  is->add_dim(lparam.memory_data_param().width());
-	}
+        {
+          rootInputName = lparam.top(0);
+          dest_net.add_input(rootInputName);
+          caffe::BlobShape* is = dest_net.add_input_shape();
+          is->add_dim(lparam.memory_data_param().batch_size());
+          is->add_dim(lparam.memory_data_param().channels());
+          is->add_dim(lparam.memory_data_param().height());
+          is->add_dim(lparam.memory_data_param().width());
+        }
       else if (lparam.type() == "Flatten")
-	{
-	  caffe::LayerParameter* rparam = dest_net.add_layer();
-	  rparam->set_name(lparam.name());
-	  rparam->set_type("Reshape");
-	  rparam->add_bottom(lparam.bottom(0));
-	  rparam->add_top(lparam.top(0));
-	  int faxis = lparam.flatten_param().axis();
-	  caffe::ReshapeParameter * rp = rparam->mutable_reshape_param();
-	  caffe::BlobShape* bs = rp->mutable_shape();
-	  for (int i=0; i<faxis; ++i)
-	    bs->add_dim(0);
-	  bs->add_dim(-1);
-	  for (int i=faxis+1; i<4; ++i)
-	    bs->add_dim(1);
-	}
+        {
+          caffe::LayerParameter* rparam = dest_net.add_layer();
+          rparam->set_name(lparam.name());
+          rparam->set_type("Reshape");
+          rparam->add_bottom(lparam.bottom(0));
+          rparam->add_top(lparam.top(0));
+          int faxis = lparam.flatten_param().axis();
+          caffe::ReshapeParameter * rp = rparam->mutable_reshape_param();
+          caffe::BlobShape* bs = rp->mutable_shape();
+          for (int i=0; i<faxis; ++i)
+            bs->add_dim(0);
+          bs->add_dim(-1);
+          for (int i=faxis+1; i<4; ++i)
+            bs->add_dim(1);
+        }
       else if (lparam.type() == "DetectionOutput")
-	{	  
-	  caffe::LayerParameter* dlparam = dest_net.add_layer();
-	  caffe::NonMaximumSuppressionParameter* nmsp =
-	    lparam.mutable_detection_output_param()->mutable_nms_param();
-	  nmsp->clear_soft_nms();
-	  nmsp->clear_theta();
-	  *dlparam = lparam;
-	  dlparam->add_top("keep_count");
-	}
+        {
+          caffe::LayerParameter* dlparam = dest_net.add_layer();
+          caffe::NonMaximumSuppressionParameter* nmsp =
+            lparam.mutable_detection_output_param()->mutable_nms_param();
+          nmsp->clear_soft_nms();
+          nmsp->clear_theta();
+          *dlparam = lparam;
+          dlparam->add_top("keep_count");
+        }
       else if (lparam.type() == "ContinuationIndicator")
-	{
-	  unparsable.push_back(i);
-	  timesteps = lparam.continuation_indicator_param().time_step();
-	  // simply skip this layer
-	}
+        {
+          unparsable.push_back(i);
+          timesteps = lparam.continuation_indicator_param().time_step();
+          // simply skip this layer
+        }
       else if (lparam.type() == "LSTM")
-	{
-	  unparsable.push_back(i);
-	  removedOutputs.push_back(lparam.top(0));
-	  // add fake input
-	  dest_net.add_input(lparam.top(0));
-	  caffe::BlobShape* is = dest_net.add_input_shape();
-	  const caffe::LayerParameter& binlayer = binary_net.layer(i);
-	  const caffe::BlobProto& weight_blob = binlayer.blobs(0);
-	  int num_out = lparam.recurrent_param().num_output();
-	  int datasize = weight_blob.data_size() / num_out / 4;
-	  is->add_dim(1); // bs will be overriden
-	  is->add_dim(timesteps);
-	  is->add_dim(datasize);
-	}
+        {
+          unparsable.push_back(i);
+          removedOutputs.push_back(lparam.top(0));
+          // add fake input
+          std::cout << "adding fake input " << lparam.top(0) << std::endl;
+          dest_net.add_input(lparam.top(0));
+          caffe::BlobShape* is = dest_net.add_input_shape();
+          const caffe::LayerParameter* binlayer = findLayerByName(binary_net, lparam.name());
+          const caffe::BlobProto& weight_blob = binlayer->blobs(0);
+          int num_out = lparam.recurrent_param().num_output();
+          int datasize = weight_blob.data_size() / num_out / 4;
+          is->add_dim(1); // bs will be overriden
+          is->add_dim(1);
+          is->add_dim(datasize);
+          is->add_dim(1);
+        }
       else 
-	{
-	  caffe::LayerParameter* dlparam = dest_net.add_layer();
-	  *dlparam = lparam;
-	  std::vector<int> inputsInRemoved = inputInList(lparam, removedOutputs);
-	  if (inputsInRemoved.size() != 0)
-	      tofix.push_back(i);
-	}
+        {
+          caffe::LayerParameter* dlparam = dest_net.add_layer();
+          *dlparam = lparam;
+          std::vector<int> inputsInRemoved = inputInList(lparam, removedOutputs);
+          if (inputsInRemoved.size() != 0)
+            {
+              std::cout << "adding layer " << i << " " << lparam.name() << " to tofix" << std::endl;
+              tofix[i] = inputsInRemoved;
+            }
+        }
     }
 
   

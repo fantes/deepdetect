@@ -33,29 +33,38 @@
 
 namespace dd
 {
-  int fixProto(const std::string dest, const std::string source, std::vector<int>& unparsable, std::vector<int>&tofix, std::vector<std::string>& removedOutputs, std::string& rootInputName, const std::string binary_proto);
+  int fixProto(const std::string dest, const std::string source, std::vector<int>& unparsable, std::map<int, std::vector<int>>&tofix, std::vector<std::string>& removedOutputs, std::string& rootInputName, const std::string binary_proto);
   int findNClasses(const std::string source, bool bbox);
   int findTopK(const std::string source);
   int findTimeSteps(const std::string source);
   int findAlphabetSize(const std::string source);
-  std::vector<int> inputInList(caffe::LayerParameter&lparam, std::vector<std::string>list);
+  std::vector<int> inputInList(const caffe::LayerParameter&lparam, std::vector<std::string>list);
   std::string firstLSTMInput(caffe::NetParameter &source_net);
   bool TRTReadProtoFromBinaryFile(const char* filename, google::protobuf::Message* proto);
   bool TRTReadProtoFromTextFile(const char* filename, google::protobuf::Message* proto);
   bool TRTWriteProtoToTextFile(const google::protobuf::Message& proto, const char* filename);
-  nvinfer1::ILayer* findLayerByName(const nvinfer1::INetworkDefinition* network, const std::string lname);    
-  void addUnparsablesFromProto(nvinfer1::INetworkDefinition* network, const std::string source,
-			       std::vector<int> unparsable, const std::string binary_proto, 
-			      const nvcaffeparser1::IBlobNameToTensor* b2t,
-			       std::map<std::string, nvinfer1::ITensor*>& t2t,
-			      spdlog::logger* logger);
-  void matchInputs(nvinfer1::INetworkDefinition* network, const std::string source_proto,
-		   std::vector<int> tofix,
-		   const std::string binary_proto,
-		   const nvcaffeparser1::IBlobNameToTensor* b2t,
-		   std::map<std::string, nvinfer1::ITensor*>& t2t,
-		   std::vector<std::string> removedOutputs,
-		   spdlog::logger* logger);
+  nvinfer1::ILayer* findLayerByName(const nvinfer1::INetworkDefinition* network, const std::string lname);
+
+  /*
+    - add layers that are not parasable by nvcaffeparser1::ICAffeParser (LSTM)
+    - fix input/ ouput links
+
+  */
+  void addUnparsablesFromProto(nvinfer1::INetworkDefinition* network,
+                               const std::string& source,
+                               const std::string& binary_proto,
+                               std::vector<int>& unparsable, std::map<int,std::vector<int>>& tofix,
+                               std::vector<std::string>& removedOutputs,
+                               std::string& rooInputName,
+                               const nvcaffeparser1::IBlobNameToTensor* b2t,
+                               spdlog::logger* logger);
+
+  caffe::LayerParameter* findLayerByName(caffe::NetParameter& net, const std::string name);
+
+  nvinfer1::ILayer* findLayerByName(const nvinfer1::INetworkDefinition* network,
+                                    const std::string lname);
+
+
 
 
 }

@@ -21,7 +21,6 @@
 #include "tensorrtinputconns.h"
 #include "half.hpp"
 #include <opencv2/core/core.hpp>
-#include <opencv2/core/cvdef.h>
 #include <opencv2/highgui/highgui.hpp>
 #include <opencv2/imgproc/imgproc.hpp>
 #include <boost/math/cstdfloat/cstdfloat_types.hpp>
