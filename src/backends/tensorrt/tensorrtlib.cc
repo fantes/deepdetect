@@ -97,6 +97,7 @@ namespace dd
       trtLogger.setLogger(this->_logger);
       initLibNvInferPlugins(&trtLogger,"");
 
+
       if (ad.has("tensorRTEngineFile"))
 	_engineFileName = ad.get("tensorRTfile").get<std::string>();
       if (ad.has("readEngine"))
@@ -298,13 +299,8 @@ namespace dd
 	
 	if (!engineRead)
 	  {
-	    std::vector<int> unparsable;
-        std::map<int,std::vector<int>> tofix;
-	    std::vector<std::string> removedOutputs;
-	    std::string rootInputName;
 	    int fixcode = fixProto(this->_mlmodel._repo + "/" +"net_tensorRT.proto",
-				   this->_mlmodel._def,unparsable,tofix,removedOutputs,
-				   rootInputName, this->_mlmodel._weights);
+				   this->_mlmodel._def, this->_mlmodel._weights);
 	    switch(fixcode)
 	      {
 	      case 1:
@@ -329,14 +325,7 @@ namespace dd
 
 	    const nvcaffeparser1::IBlobNameToTensor* blobNameToTensor
 	      = caffeParser->parse(std::string(this->_mlmodel._repo + "/" +"net_tensorRT.proto").c_str(),
-				   this->_mlmodel._weights.c_str(),
-				   *network, _datatype);
-
-        if (unparsable.size() !=0)
-          {
-            addUnparsablesFromProto(network, this->_mlmodel._def,  this->_mlmodel._weights, unparsable,
-                                    tofix, removedOutputs, rootInputName, blobNameToTensor, this->_logger.get());
-          }
+                               this->_mlmodel._weights.c_str(),  *network, _datatype);
 
 	    network->markOutput(*blobNameToTensor->find(out_blob.c_str()));
 

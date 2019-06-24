@@ -163,7 +163,6 @@ void addUnparsablesFromProto(nvinfer1::INetworkDefinition* network,
                              std::vector<int>& unparsable,
                              std::map<int,std::vector<int>>& tofix,
                              std::vector<std::string>& removedOutputs,
-                             std::string& rooInputName,
                              const nvcaffeparser1::IBlobNameToTensor* b2t,
                              spdlog::logger* logger)
 {
@@ -331,12 +330,12 @@ caffe::LayerParameter* findLayerByName(caffe::NetParameter& net, const std::stri
 }
 
 
-  int fixProto(const std::string dest, const std::string source,std::vector<int>&unparsable, std::map<int,std::vector<int>>&tofix, std::vector<std::string> & removedOutputs, std::string& rootInputName, const std::string binary_proto)
+  int fixProto(const std::string dest, const std::string source, const std::string binary_proto)
 {
   caffe::NetParameter source_net;
   caffe::NetParameter dest_net;
 
-  int timesteps;
+  int timesteps = -1;
   caffe::NetParameter binary_net;
   if (!TRTReadProtoFromBinaryFile(binary_proto.c_str(),&binary_net))
     return 3;
@@ -346,7 +345,8 @@ caffe::LayerParameter* findLayerByName(caffe::NetParameter& net, const std::stri
     return 1;
 
   dest_net.set_name(source_net.name());
-  
+  std::string last_lstm_output;
+
   for (int i =0; i<source_net.layer_size(); ++i)
     {
       caffe::LayerParameter lparam = source_net.layer(i);
@@ -365,8 +365,7 @@ caffe::LayerParameter* findLayerByName(caffe::NetParameter& net, const std::stri
         }
       else if (lparam.type() == "MemoryData")
         {
-          rootInputName = lparam.top(0);
-          dest_net.add_input(rootInputName);
+          dest_net.add_input(lparam.top(0));
           caffe::BlobShape* is = dest_net.add_input_shape();
           is->add_dim(lparam.memory_data_param().batch_size());
           is->add_dim(lparam.memory_data_param().channels());
@@ -401,37 +400,26 @@ caffe::LayerParameter* findLayerByName(caffe::NetParameter& net, const std::stri
         }
       else if (lparam.type() == "ContinuationIndicator")
         {
-          unparsable.push_back(i);
           timesteps = lparam.continuation_indicator_param().time_step();
           // simply skip this layer
         }
       else if (lparam.type() == "LSTM")
         {
-          unparsable.push_back(i);
-          removedOutputs.push_back(lparam.top(0));
-          // add fake input
-          std::cout << "adding fake input " << lparam.top(0) << std::endl;
-          dest_net.add_input(lparam.top(0));
-          caffe::BlobShape* is = dest_net.add_input_shape();
-          const caffe::LayerParameter* binlayer = findLayerByName(binary_net, lparam.name());
-          const caffe::BlobProto& weight_blob = binlayer->blobs(0);
-          int num_out = lparam.recurrent_param().num_output();
-          int datasize = weight_blob.data_size() / num_out / 4;
-          is->add_dim(1); // bs will be overriden
-          is->add_dim(1);
-          is->add_dim(datasize);
-          is->add_dim(1);
+          last_lstm_output = lparam.top(0);
+          caffe::LayerParameter* dlparam = dest_net.add_layer();
+          *dlparam = lparam;
+          dlparam->mutable_recurrent_param()->set_time_step(timesteps);
         }
-      else 
+      else if (lparam.type() == "InnerProduct")
         {
           caffe::LayerParameter* dlparam = dest_net.add_layer();
           *dlparam = lparam;
-          std::vector<int> inputsInRemoved = inputInList(lparam, removedOutputs);
-          if (inputsInRemoved.size() != 0)
-            {
-              std::cout << "adding layer " << i << " " << lparam.name() << " to tofix" << std::endl;
-              tofix[i] = inputsInRemoved;
-            }
+          dlparam->set_type("InnerProductWithAxis");
+        }
+      else
+        {
+          caffe::LayerParameter* dlparam = dest_net.add_layer();
+          *dlparam = lparam;
         }
     }
 
