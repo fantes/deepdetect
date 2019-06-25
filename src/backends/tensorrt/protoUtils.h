@@ -38,20 +38,13 @@ namespace dd
   int findTopK(const std::string source);
   int findTimeSteps(const std::string source);
   int findAlphabetSize(const std::string source);
-  std::vector<int> inputInList(const caffe::LayerParameter&lparam, std::vector<std::string>list);
   std::string firstLSTMInput(caffe::NetParameter &source_net);
   bool TRTReadProtoFromBinaryFile(const char* filename, google::protobuf::Message* proto);
   bool TRTReadProtoFromTextFile(const char* filename, google::protobuf::Message* proto);
   bool TRTWriteProtoToTextFile(const google::protobuf::Message& proto, const char* filename);
   nvinfer1::ILayer* findLayerByName(const nvinfer1::INetworkDefinition* network, const std::string lname);
 
-
-  caffe::LayerParameter* findLayerByName(caffe::NetParameter& net, const std::string name);
-
-  nvinfer1::ILayer* findLayerByName(const nvinfer1::INetworkDefinition* network,
-                                    const std::string lname);
-
-
+  void visualizeNet(const nvinfer1::INetworkDefinition* network);
 
 
 }
