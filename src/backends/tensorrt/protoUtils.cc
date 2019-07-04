@@ -124,9 +124,22 @@ void visualizeNet(const nvinfer1::INetworkDefinition* network)
           nout = 1;
         }
       for (int j=0; j< nin; ++j)
-        std::cout << "     input " << j << " " << l->getInput(j)->getName() << std::endl;
+        {
+          std::cout << "     input " << j << " " << l->getInput(j)->getName() << std::endl;
+          std::cout << "         dims: ";
+          for (int k=0; k< l->getInput(j)->getDimensions().nbDims; ++k)
+            std::cout << l->getInput(j)->getDimensions().d[k] << " ";
+          std::cout << std::endl;
+        }
       for (int j=0; j< nout; ++j)
-        std::cout << "     output " << j << " " << l->getOutput(j)->getName() << std::endl;
+        {
+          std::cout << "     output " << j << " " << l->getOutput(j)->getName() << std::endl;
+          std::cout << "         dims: ";
+          for (int k=0; k< l->getOutput(j)->getDimensions().nbDims; ++k)
+            std::cout << l->getOutput(j)->getDimensions().d[k] << " ";
+          std::cout << std::endl;
+        }
+
     }
 
 }

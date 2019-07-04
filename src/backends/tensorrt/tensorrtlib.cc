@@ -299,8 +299,9 @@ namespace dd
 	
 	if (!engineRead)
 	  {
-	    int fixcode = fixProto(this->_mlmodel._repo + "/" +"net_tensorRT.proto",
-				   this->_mlmodel._def, this->_mlmodel._weights);
+	    // int fixcode = fixProto(this->_mlmodel._repo + "/" +"net_tensorRT.proto",
+        //                        this->_mlmodel._def, this->_mlmodel._weights);
+        int fixcode = 0;
 	    switch(fixcode)
 	      {
 	      case 1:
@@ -327,7 +328,11 @@ namespace dd
 	      = caffeParser->parse(std::string(this->_mlmodel._repo + "/" +"net_tensorRT.proto").c_str(),
                                this->_mlmodel._weights.c_str(),  *network, _datatype);
 
+
+
 	    network->markOutput(*blobNameToTensor->find(out_blob.c_str()));
+
+        visualizeNet(network);
 
 	    if (out_blob == "detection_out")
 	      network->markOutput(*blobNameToTensor->find("keep_count"));
@@ -372,6 +377,9 @@ namespace dd
 
 	
 	_inputIndex = _engine->getBindingIndex("data");
+
+
+    std::cout << "number of bindings in engine: " << _engine->getNbBindings() << std::endl;
 	_outputIndex0 = _engine->getBindingIndex(out_blob.c_str());
 
 	if (_bbox)
@@ -389,10 +397,31 @@ namespace dd
 	  }
 	else if (_ctc)
 	  {
-	    _buffers.resize(2);
+	    _buffers.resize(_engine->getNbBindings());
 	    _floatOut.resize(_max_batch_size * _alphabet_size * _timesteps);
 	    cudaMalloc(&_buffers.data()[_inputIndex], _max_batch_size  * inputc._height * inputc._width * sizeof(float));
-	    cudaMalloc(&_buffers.data()[_outputIndex0], _max_batch_size * _alphabet_size * _timesteps * sizeof(float));     	    
+	    cudaMalloc(&_buffers.data()[_outputIndex0], _max_batch_size * _alphabet_size * _timesteps * sizeof(float));
+        for (int i=0; i< (_engine->getNbBindings()-2)/2; ++i) // iterate over number of lstm
+          {
+            std::string lihname = "lstm"+std::to_string(i+1)+"_hinit";
+            std::string licname = "lstm"+std::to_string(i+1)+"_cinit";
+            int bih = _engine->getBindingIndex(lihname.c_str());
+            nvinfer1::Dims dimh = _engine->getBindingDimensions(bih);
+            int size = 1;
+            for (int j=0; j<dimh.nbDims; ++j)
+              size *= dimh.d[j];
+            std::cout << "lstm allocating size: "<< size << std::endl;
+            cudaMalloc(&_buffers.data()[bih], size * sizeof(float));
+            cudaMemset(&_buffers.data()[bih], 0, size*sizeof(float));
+            int cih = _engine->getBindingIndex(licname.c_str());
+            nvinfer1::Dims dimc = _engine->getBindingDimensions(cih);
+            size = 1;
+            for (int j=0; j<dimc.nbDims; ++j)
+              size *= dimc.d[j];
+            std::cout << "lstm allocating size: "<< size << std::endl;
+            cudaMalloc(&_buffers.data()[cih], size * sizeof(float));
+            cudaMemset(&_buffers.data()[cih], 0, size*sizeof(float));
+          }
 	  }
 	else if (_timeserie)
 	  {
@@ -574,17 +603,17 @@ namespace dd
 		vrad.push_back(rad);
 	      }
 	  }
-	
+
 	else if (_ctc)
 	  {
 	    const float *pred_data = _floatOut.data();
 	    // input is time_step x batch_size x alphabet_size
-	    
+
 	    for (int j=0;j<num_processed;j++)
 	      {
 		std::vector<int> pred_label_seq_with_blank(_timesteps);
 		std::vector<std::vector<float>> pred_sample;
-		
+
 		const float *pred_cur = pred_data;
 		pred_cur += j*_alphabet_size;
 		for (int t=0;t<_timesteps;t++)
@@ -592,7 +621,7 @@ namespace dd
 		    pred_label_seq_with_blank[t] = std::max_element(pred_cur, pred_cur + _alphabet_size) - pred_cur;
 		    pred_cur += _max_batch_size * _alphabet_size;
 		  }
-		
+
 		// get labels seq
 		std::vector<int> pred_label_seq;
 		int prev = blank_label;
@@ -612,6 +641,7 @@ namespace dd
 		    //utf8::append(this->_mlmodel.get_hcorresp(l),outstr);
 		  }
 		std::vector<std::string> cats;
+        std::cout << "OUTSTR : " << outstr << std::endl;
 		cats.push_back(outstr);
 		if (!inputc._ids.empty())
 		  outseq.add("uri",inputc._ids.at(idoffset+j));
