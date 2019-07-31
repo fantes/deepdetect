@@ -446,6 +446,13 @@ elseif(USE_CAFFE)
     list(APPEND CAFFE_DD_MAKE
       ${CMAKE_COMMAND} -E env PATH=${CMAKE_BINARY_DIR}/protobuf/bin:$ENV{PATH}
       )
+  elseif (USE_TORCH)
+    message(STATUS "using ${CMAKE_BINARY_DIR}/pytorch/src/pytorch/torch/bin/protoc")
+    set(PROTOBUF_INCLUDE_DIR ${CMAKE_BINARY_DIR}/pytorch/src/pytorch/torch/include/)
+    set(PROTOBUF_LIB_DIR ${CMAKE_BINARY_DIR}/pytorch/src/pytorch/torch/lib/)
+    list(APPEND CAFFE_DD_MAKE
+      ${CMAKE_COMMAND} -E env LD_LIBRARY_PATH=${PROTOBUF_LIB_DIR}:$ENV{LD_LIBRARY_PATH} PATH=${CMAKE_BINARY_DIR}/pytorch/src/pytorch/torch/bin/:$ENV{PATH}
+      )
   endif()
   list(APPEND CAFFE_DD_MAKE make)
 
@@ -484,13 +491,27 @@ elseif(USE_CAFFE)
     set(CAFFE_DEBUG 0)
   endif()
 
-  list(APPEND CAFFE_DD_CONFIGURE_COMMAND
-    ln -sf ${CAFFE_DD_CONFIG_FILE} Makefile.config &&
-    echo "OPENCV_VERSION:=${OPENCV_VERSION}" >> Makefile.config &&
-    echo "USE_SYSLOG:=${USE_SYSLOG}" >> Makefile.config &&
-    echo "DEBUG:=${CAFFE_DEBUG}" >> Makefile.config &&
-    ${CAFFE_DD_MAKE} ${CAFFE_DD_MAKE_ARG} -j${N}
-    )
+  if (USE_TORCH)
+    list(APPEND CAFFE_DD_CONFIGURE_COMMAND
+      ln -sf ${CAFFE_DD_CONFIG_FILE} Makefile.config &&
+      echo "OPENCV_VERSION:=${OPENCV_VERSION}" >> Makefile.config &&
+      echo "USE_SYSLOG:=${USE_SYSLOG}" >> Makefile.config &&
+      echo "DEBUG:=${CAFFE_DEBUG}" >> Makefile.config &&
+      echo "INCLUDE_DIRS+=${PROTOBUF_INCLUDE_DIR}" >> Makefile.config &&
+      echo "LIBRARY_DIRS+=${PROTOBUF_LIB_DIR}" >> Makefile.config &&
+      ${CAFFE_DD_MAKE} ${CAFFE_DD_MAKE_ARG} -j${N}
+      )
+    message(STATUS "include_dirs : ${INCLUDE_DIRS}")
+
+  else()
+    list(APPEND CAFFE_DD_CONFIGURE_COMMAND
+      ln -sf ${CAFFE_DD_CONFIG_FILE} Makefile.config &&
+      echo "OPENCV_VERSION:=${OPENCV_VERSION}" >> Makefile.config &&
+      echo "USE_SYSLOG:=${USE_SYSLOG}" >> Makefile.config &&
+      echo "DEBUG:=${CAFFE_DEBUG}" >> Makefile.config &&
+      ${CAFFE_DD_MAKE} ${CAFFE_DD_MAKE_ARG} -j${N}
+      )
+  endif()
 
   ExternalProject_Add(
     caffe_dd
@@ -546,6 +567,13 @@ if (USE_TF)
   endif()
 endif()
 
+if (USE_TORCH)
+  if (USE_CAFFE)
+    add_dependencies(caffe_dd pytorch)
+  endif()
+endif()
+
+
 if (USE_CAFFE2)
   if (USE_CAFFE)
     add_dependencies(caffe_dd pytorch)
@@ -591,6 +619,18 @@ endif()
 
 # Torch
 if (USE_TORCH)
+
+  set(PROTOBUF_INCLUDE_DIR ${CMAKE_BINARY_DIR}/pytorch/src/pytorch/torch/include/)
+  set(PROTOBUF_LIB_DIR ${CMAKE_BINARY_DIR}/pytorch/src/pytorch/torch/lib/)
+
+  set(PYTORCH_PATCHES_PATH ${CMAKE_BINARY_DIR}/patches/pytorch)
+
+  set(PYTORCH_PATCHES
+    ${PYTORCH_PATCHES_PATH}/pytorch_log.patch
+    )
+
+  include_directories("${PROTOBUF_INCLUDE_DIR}")
+
   message(STATUS "Configuring libtorch")
   add_definitions(-DUSE_TORCH)
 
@@ -610,8 +650,9 @@ if (USE_TORCH)
       GIT_REPOSITORY https://github.com/pytorch/pytorch.git
       GIT_TAG ${PYTORCH_COMMIT}
       UPDATE_DISCONNECTED 1
+      PATCH_COMMAND test -f ${PYTORCH_COMPLETE} && echo Skipping || git apply ${PYTORCH_PATCHES} && echo Applying ${PYTORCH_PATCHES}
       CONFIGURE_COMMAND ""
-      BUILD_COMMAND export ${PYTORCH_CMAKE_FLAGS}
+      BUILD_COMMAND export GLIBCXX_USE_CXX11_ABI=1 && export BUILD_TEST=0
       COMMAND test -f ${PYTORCH_COMPLETE} && echo Skipping || python3 ../pytorch/tools/build_libtorch.py
       INSTALL_COMMAND ""
     )
@@ -633,6 +674,16 @@ if (USE_TORCH)
 
   set(TORCH_INC_DIR ${TORCH_LOCATION}/include/ ${TORCH_LOCATION}/include/torch/csrc/api/include/)
   set(TORCH_LIB_DIR ${TORCH_LOCATION}/lib/)
+
+  if (USE_TENSORRT)
+    add_custom_command(TARGET pytorch POST_BUILD
+      COMMAND LD_LIBRARY_PATH=${PROTOBUF_LIB_DIR}:$ENV{LD_LIBRARY_PATH} ${CMAKE_BINARY_DIR}/pytorch/src/pytorch/torch/bin/protoc
+      --proto_path=${CMAKE_SOURCE_DIR}/src/backends/tensorrt
+      --cpp_out=${CMAKE_BINARY_DIR}/src ${CMAKE_SOURCE_DIR}/src/backends/tensorrt/caffe.proto
+      WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+      COMMENT "generating caffe.pb.*")
+  endif()
+
 endif()
 
 # XGBoost
