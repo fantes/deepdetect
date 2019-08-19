@@ -672,7 +672,7 @@ if (USE_TORCH)
     list(APPEND TORCH_LIB_DEPS caffe2_gpu ${TORCH_LOCATION}/lib/libc10_cuda.so)
   endif()
 
-  set(TORCH_INC_DIR ${TORCH_LOCATION}/include/ ${TORCH_LOCATION}/include/torch/csrc/api/include/)
+  set(TORCH_INC_DIR ${TORCH_LOCATION}/include/ ${TORCH_LOCATION}/include/torch/csrc/api/include/ ${CMAKE_BINARY_DIR}/pytorch/src/pytorch/)
   set(TORCH_LIB_DIR ${TORCH_LOCATION}/lib/)
 
   if (USE_TENSORRT)
