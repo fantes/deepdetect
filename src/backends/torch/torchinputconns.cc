@@ -4,18 +4,85 @@ namespace dd {
 
 using namespace torch;
 
+#define BATCHES_PER_TRANSACTION 10
+
 // ===== TorchDataset
 
-void TorchDataset::add_batch(std::vector<at::Tensor> data, std::vector<at::Tensor> target)
+  void TorchDataset::finalize_db()
+  {
+    if (_current_index % BATCHES_PER_TRANSACTION != 0) {
+      _txn->Commit();
+      _logger->info("Processed {} text entries",count);
+    }
+    _dbData->Close();
+    _current_index = 0;
+  }
+
+  void TorchDataset::write_tensors_to_db(std::vector<at::Tensor> data, std::vector<at::Tensor> target)
+  {
+    std::ostringstream dstream;
+    torch::save(data, dstream);
+    std::ostringstream tstream;
+    torch::save(data, tstream);
+
+    if (_dbData == nullptr)
+      {
+        _dbData = std::unique_ptr<db::DB>(db::GetDB(_backend));
+        _dbData->Open(_dbFullName, db::NEW);
+        _txn = std::unique_ptr<db::Transaction>(_dbData->NewTransaction());
+      }
+    const int kMaxKeyLength = 256;
+    char data_key_cstr[kMaxKeyLength];
+    char target_key_cstr[kMaxKeyLength];
+
+	int datak_length = snprintf(data_key_cstr,kMaxKeyLength,
+                                "%s_data",std::to_string(_current_index).c_str());
+	int targetk_length = snprintf(target_key_cstr,kMaxKeyLength,
+                                  "%s_target",std::to_string(_current_index).c_str());
+
+    _txn->Put(string(data_key_cstr, datak_length) , dstream);
+    _txn->Put(string(target_key_cstr, targetk_length) , tstream);
+
+
+    //should not commit transations every time;
+    if (++current_index % BATCHES_PER_TRANSACTION == 0)
+      {
+        _txn->Commit();
+        _txn.reset(db->NewTransaction());
+        _logger->info("Processed one batch of {} tensors", data.size());
+      }
+  }
+
+
+  void TorchDataset::add_batch(std::vector<at::Tensor> data, std::vector<at::Tensor> target)
 {
-    _batches.push_back(TorchBatch(data, target));
+  if (!_db)
+      _batches.push_back(TorchBatch(data, target));
+  else
+      write_tensors_to_db(data, target);
 }
 
 void TorchDataset::reset()
 {
-    _indices.clear();
 
-    for (int64_t i = 0; i < _batches.size(); ++i) {
+  if (!_db)
+    {
+      _indices.clear();
+
+      for (int64_t i = 0; i < _batches.size(); ++i) {
+        _indices.push_back(i);
+      }
+    }
+  else  //below db case
+    {
+      _indices.clear();
+      if (_dbData == nullptr)
+        {
+          _dbData = db::GetDB(_backend);
+          _dbData->Open(_dbFullName, db::READ);
+        }
+
+      for (int64_t i= 0; i< _dbData->Count(); ++i)
         _indices.push_back(i);
     }
 
@@ -31,44 +98,71 @@ void TorchDataset::reset()
 c10::optional<TorchBatch> TorchDataset::get_batch(BatchRequestType request)
 {
     size_t count = request[0];
+    std::vector<Tensor> data_tensors;
+    std::vector<Tensor> target_tensors;
+
     count = count < _indices.size() ? count : _indices.size();
 
     if (count == 0) {
-        return torch::nullopt;
+      return torch::nullopt;
     }
 
     std::vector<std::vector<Tensor>> data, target;
 
-    while(count != 0) {
-        auto id = _indices.back();
-        auto entry = _batches[id];
 
-        for (int i = 0; i < entry.data.size(); ++i)
-        {
-            while (i >= data.size())
+    if (!_db)
+      {
+        while(count != 0) {
+          auto id = _indices.back();
+          auto entry = _batches[id];
+
+          for (int i = 0; i < entry.data.size(); ++i)
+            {
+              while (i >= data.size())
                 data.emplace_back();
-            data[i].push_back(entry.data.at(i));
-        }
-        for (int i = 0; i < entry.target.size(); ++i)
-        {
-            while (i >= target.size())
+              data[i].push_back(entry.data.at(i));
+            }
+          for (int i = 0; i < entry.target.size(); ++i)
+            {
+              while (i >= target.size())
                 target.emplace_back();
-            target[i].push_back(entry.target.at(i));
+              target[i].push_back(entry.target.at(i));
+            }
+
+          _indices.pop_back();
+          count--;
         }
 
-        _indices.pop_back();
-        count--;
-    }
+        for (auto vec : data)
+          data_tensors.push_back(torch::stack(vec));
 
-    std::vector<Tensor> data_tensors;
-    for (auto vec : data)
-        data_tensors.push_back(torch::stack(vec));
+        for (auto vec : target)
+          target_tensors.push_back(torch::stack(vec));
+      }
+    else // below db case
+      {
+        const int kMaxKeyLength = 256;
+        char data_key_cstr[kMaxKeyLength];
+        char target_key_cstr[kMaxKeyLength];
 
-    std::vector<Tensor> target_tensors;
-    for (auto vec : target)
-        target_tensors.push_back(torch::stack(vec));
+        while(count != 0) {
+          auto id = _indices.back();
+          int datak_length = snprintf(data_key_cstr,kMaxKeyLength,
+                                      "%s_data",std::to_string(id).c_str());
+          int targetk_length = snprintf(target_key_cstr,kMaxKeyLength,
+                                        "%s_target",std::to_string(id).c_str());
+          std::stringstream datastringstream;
+          std::stringstring targetstringstream;
+          _dbData->Get(data_key_cstr, datastringstream.str());
+          _dbData->Get(target_key_cstr, targetstringstream.str());
+          torch::load(data_tensors, datastringstream);
+          torch::load(target_tensors, targetstringstream);
+          _indices.pop_back();
+          count--;
+        }
+      }
 
-    return TorchBatch{ data_tensors, target_tensors };
+        return TorchBatch{ data_tensors, target_tensors };
 }
 
 TorchBatch TorchDataset::get_cached() {
@@ -96,6 +190,9 @@ TorchDataset TorchDataset::split(double start, double stop)
 void TxtTorchInputFileConn::fillup_parameters(const APIData &ad_input)
 {
   TxtInputFileConn::fillup_parameters(ad_input);
+  if (ad.has("db"))
+	_db = ad.get("db").get<bool>();
+
 }
 
 void TxtTorchInputFileConn::transform(const APIData &ad) {
@@ -105,7 +202,13 @@ void TxtTorchInputFileConn::transform(const APIData &ad) {
 
     try
     {
+      if (!_db)
         TxtInputFileConn::transform(ad);
+      else
+        {
+          // here populate db in an incremental way ? or do it outside from dede ?
+          deserialize_vocab();
+        }
     }
     catch(const std::exception& e)
     {
@@ -136,9 +239,20 @@ void TxtTorchInputFileConn::transform(const APIData &ad) {
         _eot_pos = _vocab.at("<|endoftext|>")._pos;
     }
 
-    fill_dataset(_dataset, _txt);
-    if (!_test_txt.empty())
-        fill_dataset(_test_dataset, _test_txt);
+    if (!_db)
+      {
+        fill_dataset(_dataset, _txt);
+        destroy_txt_entries(_txt);
+        if (!_test_txt.empty())
+          {
+            fill_dataset(_test_dataset, _test_txt);
+            destroy_txt_entries(_test_txt);
+          }
+      }
+    else
+      {
+        // _txt and _test_txt have not been filled by txtinputfileconn::transform() yet
+      }
 }
 
 TorchBatch TxtTorchInputFileConn::generate_masked_lm_batch(const TorchBatch &example)

@@ -40,6 +40,12 @@ namespace dd
         bool _shuffle = false;
         long _seed = -1;
         std::vector<int64_t> _indices;
+        int64_t _current_index = 0;
+        std::string _dbFullName;
+        std::string _backend;
+        bool _db;
+        std::unique_ptr<db::DB> _dbData = nullptr;
+        std::unique_ptr<db::Transaction> _txn = nullptr;
 
     public:
         /// Vector containing the whole dataset (the "cached data").
@@ -51,6 +57,13 @@ namespace dd
         void add_batch(std::vector<at::Tensor> data, std::vector<at::Tensor> target = {});
 
         void reset();
+
+        void setDbParams(bool db, std::string backend, std::string dbname)
+        {
+          _db = db;
+          _backend = backend;
+          _dbFullName = dbname + "." + _backend;
+        }
 
         /// Size of data loaded in memory
         size_t cache_size() const { return _batches.size(); }
@@ -82,15 +95,27 @@ namespace dd
     class TorchInputInterface
     {
     public:
-        TorchInputInterface() {}
+        TorchInputInterface()  {}
         TorchInputInterface(const TorchInputInterface &i)
              : _finetuning(i._finetuning),
              _lm_params(i._lm_params),
              _dataset(i._dataset),
              _test_dataset(i._test_dataset),
+             _db(i._db),
              _input_format(i._input_format) { }
 
+
         ~TorchInputInterface() {}
+
+        void init(const APIData &ad, std::string model_repo)
+        {
+          if (ad_input.has("db") && ad_input.get("db").get<bool>())
+            {
+              _db = true;
+              _dataset.set_dbParams(_db, _backend, model_repo + "/train");
+              _test_dataset.set_dbParams(_db, _backend, model_repo + "/test");
+            }
+        }
 
         torch::Tensor toLongTensor(std::vector<int64_t> &values) {
             int64_t val_size = values.size();
@@ -113,6 +138,11 @@ namespace dd
          * see*/
         std::string _input_format;
         std::vector<int64_t> _lengths;/**< length of each sentence with txt connector. */
+
+        bool _db = false;
+        std::string _dbname = "train";
+        std::string _test_db_name = "test";
+        std::string _backend = "lmdb";
     };
 
     class ImgTorchInputFileConn : public ImgInputFileConn, public TorchInputInterface
@@ -138,6 +168,7 @@ namespace dd
 
         void init(const APIData &ad)
         {
+          TorchInputInterface::init(ad, _model_repo);
             ImgInputFileConn::init(ad);
         }
 
@@ -195,7 +226,9 @@ namespace dd
         void init(const APIData &ad)
         {
             TxtInputFileConn::init(ad);
+            TorchInputInterface::init(ad, _model_repo);
             fillup_parameters(ad);
+
         }
 
         void fillup_parameters(const APIData &ad_input);
