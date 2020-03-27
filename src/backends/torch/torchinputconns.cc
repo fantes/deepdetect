@@ -12,7 +12,7 @@ using namespace torch;
   {
     if (_current_index % BATCHES_PER_TRANSACTION != 0) {
       _txn->Commit();
-      _logger->info("Processed {} text entries",count);
+      _logger->info("Processed {} tensors",_current_index);
     }
     _dbData->Close();
     _current_index = 0;
@@ -27,9 +27,9 @@ using namespace torch;
 
     if (_dbData == nullptr)
       {
-        _dbData = std::unique_ptr<db::DB>(db::GetDB(_backend));
+        _dbData = std::shared_ptr<db::DB>(db::GetDB(_backend));
         _dbData->Open(_dbFullName, db::NEW);
-        _txn = std::unique_ptr<db::Transaction>(_dbData->NewTransaction());
+        _txn = std::shared_ptr<db::Transaction>(_dbData->NewTransaction());
       }
     const int kMaxKeyLength = 256;
     char data_key_cstr[kMaxKeyLength];
@@ -40,15 +40,15 @@ using namespace torch;
 	int targetk_length = snprintf(target_key_cstr,kMaxKeyLength,
                                   "%s_target",std::to_string(_current_index).c_str());
 
-    _txn->Put(string(data_key_cstr, datak_length) , dstream);
-    _txn->Put(string(target_key_cstr, targetk_length) , tstream);
+    _txn->Put(string(data_key_cstr, datak_length) , dstream.str());
+    _txn->Put(string(target_key_cstr, targetk_length) , tstream.str());
 
 
     //should not commit transations every time;
-    if (++current_index % BATCHES_PER_TRANSACTION == 0)
+    if (++_current_index % BATCHES_PER_TRANSACTION == 0)
       {
         _txn->Commit();
-        _txn.reset(db->NewTransaction());
+        _txn.reset(_dbData->NewTransaction());
         _logger->info("Processed one batch of {} tensors", data.size());
       }
   }
@@ -78,7 +78,7 @@ void TorchDataset::reset()
       _indices.clear();
       if (_dbData == nullptr)
         {
-          _dbData = db::GetDB(_backend);
+          _dbData = std::shared_ptr<db::DB>(db::GetDB(_backend));
           _dbData->Open(_dbFullName, db::READ);
         }
 
@@ -151,12 +151,15 @@ c10::optional<TorchBatch> TorchDataset::get_batch(BatchRequestType request)
                                       "%s_data",std::to_string(id).c_str());
           int targetk_length = snprintf(target_key_cstr,kMaxKeyLength,
                                         "%s_target",std::to_string(id).c_str());
-          std::stringstream datastringstream;
-          std::stringstring targetstringstream;
-          _dbData->Get(data_key_cstr, datastringstream.str());
-          _dbData->Get(target_key_cstr, targetstringstream.str());
-          torch::load(data_tensors, datastringstream);
-          torch::load(target_tensors, targetstringstream);
+
+          std::string datastring;
+          std::string targetstring;
+          _dbData->Get(data_key_cstr, datastring);
+          _dbData->Get(target_key_cstr, targetstring);
+          std::stringstream datastream(datastring);
+          torch::load(data_tensors, datastream);
+          std::stringstream targetstream(targetstring);
+          torch::load(target_tensors, targetstream);
           _indices.pop_back();
           count--;
         }
@@ -190,8 +193,8 @@ TorchDataset TorchDataset::split(double start, double stop)
 void TxtTorchInputFileConn::fillup_parameters(const APIData &ad_input)
 {
   TxtInputFileConn::fillup_parameters(ad_input);
-  if (ad.has("db"))
-	_db = ad.get("db").get<bool>();
+  if (ad_input.has("db"))
+	_db = ad_input.get("db").get<bool>();
 
 }
 

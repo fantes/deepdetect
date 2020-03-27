@@ -26,8 +26,11 @@
 
 #include <torch/torch.h>
 
+
 #include "imginputfileconn.h"
 #include "txtinputfileconn.h"
+#include "backends/torch/db.hpp"
+#include "backends/torch/db_lmdb.hpp"
 
 namespace dd
 {
@@ -44,8 +47,10 @@ namespace dd
         std::string _dbFullName;
         std::string _backend;
         bool _db;
-        std::unique_ptr<db::DB> _dbData = nullptr;
-        std::unique_ptr<db::Transaction> _txn = nullptr;
+      std::shared_ptr<db::DB> _dbData;
+      std::shared_ptr<db::Transaction> _txn;
+      std::shared_ptr<spdlog::logger> _logger;
+
 
     public:
         /// Vector containing the whole dataset (the "cached data").
@@ -54,16 +59,30 @@ namespace dd
 
         TorchDataset() {}
 
+      TorchDataset(const TorchDataset &d)
+        : _shuffle(d._shuffle), _seed(d._seed), _indices(d._indices),
+          _current_index(d._current_index),  _dbFullName(d._dbFullName),
+          _backend(d._backend), _db(d._db), _dbData(d._dbData), _txn(d._txn), _logger(d._logger)
+      {
+      }
+
         void add_batch(std::vector<at::Tensor> data, std::vector<at::Tensor> target = {});
+        void finalize_db();
+        void write_tensors_to_db(std::vector<at::Tensor> data, std::vector<at::Tensor> target);
 
         void reset();
 
-        void setDbParams(bool db, std::string backend, std::string dbname)
+        void set_dbParams(bool db, std::string backend, std::string dbname)
         {
           _db = db;
           _backend = backend;
           _dbFullName = dbname + "." + _backend;
         }
+
+      void set_logger(std::shared_ptr<spdlog::logger> logger)
+      {
+        _logger = logger;
+      }
 
         /// Size of data loaded in memory
         size_t cache_size() const { return _batches.size(); }
@@ -99,21 +118,23 @@ namespace dd
         TorchInputInterface(const TorchInputInterface &i)
              : _finetuning(i._finetuning),
              _lm_params(i._lm_params),
-             _dataset(i._dataset),
-             _test_dataset(i._test_dataset),
-             _db(i._db),
-             _input_format(i._input_format) { }
+               _dataset(i._dataset),
+               _test_dataset(i._test_dataset),
+               _input_format(i._input_format),
+             _db(i._db) { }
 
 
         ~TorchInputInterface() {}
 
-        void init(const APIData &ad, std::string model_repo)
+      void init(const APIData &ad, std::string model_repo, std::shared_ptr<spdlog::logger> logger)
         {
-          if (ad_input.has("db") && ad_input.get("db").get<bool>())
+          if (ad.has("db") && ad.get("db").get<bool>())
             {
               _db = true;
               _dataset.set_dbParams(_db, _backend, model_repo + "/train");
+              _dataset.set_logger(logger);
               _test_dataset.set_dbParams(_db, _backend, model_repo + "/test");
+              _test_dataset.set_logger(logger);
             }
         }
 
@@ -129,13 +150,13 @@ namespace dd
         std::string get_word(int64_t id) const { return ""; }
 
 
-        TorchDataset _dataset;
-        TorchDataset _test_dataset;
 
-        MaskedLMParams _lm_params;
         bool _finetuning;
+        MaskedLMParams _lm_params;
         /** Tell which inputs should be provided to the models.
          * see*/
+        TorchDataset _dataset;
+        TorchDataset _test_dataset;
         std::string _input_format;
         std::vector<int64_t> _lengths;/**< length of each sentence with txt connector. */
 
@@ -168,7 +189,7 @@ namespace dd
 
         void init(const APIData &ad)
         {
-          TorchInputInterface::init(ad, _model_repo);
+          TorchInputInterface::init(ad, _model_repo, _logger);
             ImgInputFileConn::init(ad);
         }
 
@@ -226,7 +247,7 @@ namespace dd
         void init(const APIData &ad)
         {
             TxtInputFileConn::init(ad);
-            TorchInputInterface::init(ad, _model_repo);
+            TorchInputInterface::init(ad, _model_repo, _logger);
             fillup_parameters(ad);
 
         }

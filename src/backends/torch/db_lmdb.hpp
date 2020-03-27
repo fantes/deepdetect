@@ -10,9 +10,9 @@
 
 namespace dd { namespace db {
 
-inline void MDB_CHECK(int mdb_status) {
-  CHECK_EQ(mdb_status, MDB_SUCCESS) << mdb_strerror(mdb_status);
-}
+ inline void MDB_CHECK(int mdb_status) {
+   CHECK_EQ(mdb_status, MDB_SUCCESS) << mdb_strerror(mdb_status);
+ }
 
 class LMDBCursor : public Cursor {
  public:
@@ -26,11 +26,11 @@ class LMDBCursor : public Cursor {
   }
   virtual void SeekToFirst() { Seek(MDB_FIRST); }
   virtual void Next() { Seek(MDB_NEXT); }
-  virtual string key() {
-    return string(static_cast<const char*>(mdb_key_.mv_data), mdb_key_.mv_size);
+  virtual std::string key() {
+    return std::string(static_cast<const char*>(mdb_key_.mv_data), mdb_key_.mv_size);
   }
-  virtual string value() {
-    return string(static_cast<const char*>(mdb_value_.mv_data),
+  virtual std::string value() {
+    return std::string(static_cast<const char*>(mdb_value_.mv_data),
         mdb_value_.mv_size);
   }
   virtual bool valid() { return valid_; }
@@ -41,7 +41,7 @@ class LMDBCursor : public Cursor {
     if (mdb_status == MDB_NOTFOUND) {
       valid_ = false;
     } else {
-      MDB_CHECK(mdb_status);
+      //      MDB_CHECK(mdb_status);
       valid_ = true;
     }
   }
@@ -56,12 +56,12 @@ class LMDBTransaction : public Transaction {
  public:
   explicit LMDBTransaction(MDB_env* mdb_env)
     : mdb_env_(mdb_env) { }
-  virtual void Put(const string& key, const string& value);
+  virtual void Put(const std::string& key, const std::string& value);
   virtual void Commit();
 
  private:
   MDB_env* mdb_env_;
-  vector<string> keys, values;
+  std::vector<std::string> keys, values;
 
   void DoubleMapSize();
 
@@ -72,7 +72,7 @@ class LMDB : public DB {
  public:
   LMDB() : mdb_env_(NULL) { }
   virtual ~LMDB() { Close(); }
-  virtual void Open(const string& source, Mode mode);
+  virtual void Open(const std::string& source, Mode mode);
   virtual void Close() {
     if (mdb_env_ != NULL) {
       mdb_dbi_close(mdb_env_, mdb_dbi_);

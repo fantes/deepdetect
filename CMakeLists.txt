@@ -34,6 +34,10 @@ include(ExternalProject)
 
 set (deepdetect_VERSION_MAJOR 0)
 set (deepdetect_VERSION_MINOR 1)
+set (USE_HDF5 ON)
+set(HDF5_LIB /usr/lib/x86_64-linux-gnu/hdf5/serial)
+set (CAFFE_INC_DIR /home/infantes/code/caffe/include /home/infantes/code/caffe/build/src)
+set (CAFFE_LIB_DIR /home/infantes/code/caffe/build/lib ${HDF5_LIB})
 
 # options
 OPTION(BUILD_TESTS "Should the tests be built")
@@ -757,7 +761,7 @@ if (USE_TORCH)
   #  )
   #message(STATUS "Libraries are: ${TORCH_LIBRARIES}")
 
-  set(TORCH_LIB_DEPS torch ${TORCH_LOCATION}/lib/libc10.so)
+  set(TORCH_LIB_DEPS torch ${TORCH_LOCATION}/lib/libc10.so -llmdb)
   
   if (NOT USE_CPU_ONLY AND CUDA_FOUND)
     list(APPEND TORCH_LIB_DEPS  ${TORCH_LOCATION}/lib/libc10_cuda.so iomp5)

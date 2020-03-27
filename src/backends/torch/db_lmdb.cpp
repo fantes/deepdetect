@@ -4,11 +4,12 @@
 #include <sys/stat.h>
 
 #include <string>
+#include <cstring>
 #include <iostream>
 
 namespace dd { namespace db {
 
-void LMDB::Open(const string& source, Mode mode) {
+    void LMDB::Open(const std::string& source, Mode mode) {
   MDB_CHECK(mdb_env_create(&mdb_env_));
   if (mode == NEW) {
     int mk = mkdir(source.c_str(), 0744);
@@ -82,7 +83,7 @@ void LMDB::Get(const std::string &key,
   mdb_dbi_close(mdb_env_, mdb_dbi);
 }
   
-void LMDBTransaction::Put(const string& key, const string& value) {
+    void LMDBTransaction::Put(const std::string& key, const std::string& value) {
   keys.push_back(key);
   values.push_back(value);
 }
