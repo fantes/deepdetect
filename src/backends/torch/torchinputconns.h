@@ -60,7 +60,7 @@ namespace dd
         TorchDataset() {}
 
       TorchDataset(const TorchDataset &d)
-        : _shuffle(d._shuffle), _seed(d._seed), _indices(d._indices),
+        : _shuffle(d._shuffle), _seed(d._seed), _indices(d._indices), _batches(d._batches),
           _current_index(d._current_index),  _dbFullName(d._dbFullName),
           _backend(d._backend), _db(d._db), _dbData(d._dbData), _txn(d._txn), _logger(d._logger)
       {
@@ -131,11 +131,11 @@ namespace dd
           if (ad.has("db") && ad.get("db").get<bool>())
             {
               _db = true;
-              _dataset.set_dbParams(_db, _backend, model_repo + "/train");
-              _dataset.set_logger(logger);
-              _test_dataset.set_dbParams(_db, _backend, model_repo + "/test");
-              _test_dataset.set_logger(logger);
             }
+          _dataset.set_dbParams(_db, _backend, model_repo + "/train");
+          _dataset.set_logger(logger);
+          _test_dataset.set_dbParams(_db, _backend, model_repo + "/test");
+          _test_dataset.set_logger(logger);
         }
 
         torch::Tensor toLongTensor(std::vector<int64_t> &values) {

@@ -566,8 +566,19 @@ namespace dd
     template <class TInputConnectorStrategy, class TOutputConnectorStrategy, class TMLModel>
     int TorchLib<TInputConnectorStrategy, TOutputConnectorStrategy, TMLModel>::predict(const APIData &ad, APIData &out)
     {
+      int64_t predict_batch_size = 1;
         APIData params = ad.getobj("parameters");
         APIData output_params = params.getobj("output");
+        if (params.has("mllib"))
+          {
+            APIData ad_mllib = ad.getobj("parameters").getobj("mllib");
+            if (ad_mllib.has("net"))
+              {
+                APIData ad_net = ad_mllib.getobj("net");
+                if (ad_net.has("test_batch_size"))
+                  predict_batch_size = ad_net.get("test_batch_size").get<int>();
+              }
+          }
 
         TInputConnectorStrategy inputc(this->_inputc);
         TOutputConnectorStrategy outputc(this->_outputc);;
@@ -591,63 +602,69 @@ namespace dd
             return 0;
         }
 
-        inputc._dataset.reset();
-        TorchBatch batch = inputc._dataset.get_cached();
+        auto dataloader = torch::data::make_data_loader(
+              std::move(inputc._dataset),
+              data::DataLoaderOptions(predict_batch_size)
+        );
 
-        std::vector<c10::IValue> in_vals;
-        for (Tensor tensor : batch.data)
-            in_vals.push_back(tensor.to(_device));
-        Tensor output;
-        try
-        {
-            output = to_tensor_safe(_module.forward(in_vals));
-            if (_template == "gpt2")
-            {
-                // Keep only the prediction for the last token
-                Tensor input_ids = batch.data[0];
-                std::vector<Tensor> outputs;
-                for (int i = 0; i < input_ids.size(0); ++i)
-                {
-                    // output is (n_batch * sequence_length * vocab_size)
-                    // With gpt2, last token is endoftext so we need to take the previous output.
-                    outputs.push_back(output[i][inputc._lengths.at(i) - 2]);
-                }
-                output = torch::stack(outputs);
-            }
-            output = torch::softmax(output, 1).to(cpu);
-        }
-        catch (std::exception &e)
-        {
-            throw MLLibInternalException(std::string("Libtorch error:") + e.what());
-        }
-
-        // Output
         std::vector<APIData> results_ads;
 
-        if (output_params.has("best"))
+        for (TorchBatch batch : *dataloader)
         {
+
+          std::vector<c10::IValue> in_vals;
+          for (Tensor tensor : batch.data)
+            in_vals.push_back(tensor.to(_device));
+          Tensor output;
+          try
+            {
+              output = to_tensor_safe(_module.forward(in_vals));
+              if (_template == "gpt2")
+                {
+                  // Keep only the prediction for the last token
+                  Tensor input_ids = batch.data[0];
+                  std::vector<Tensor> outputs;
+                  for (int i = 0; i < input_ids.size(0); ++i)
+                    {
+                      // output is (n_batch * sequence_length * vocab_size)
+                      // With gpt2, last token is endoftext so we need to take the previous output.
+                      outputs.push_back(output[i][inputc._lengths.at(i) - 2]);
+                    }
+                  output = torch::stack(outputs);
+                }
+              output = torch::softmax(output, 1).to(cpu);
+            }
+          catch (std::exception &e)
+            {
+              throw MLLibInternalException(std::string("Libtorch error:") + e.what());
+            }
+
+          // Output
+
+          if (output_params.has("best"))
+          {
             const int best_count = output_params.get("best").get<int>();
             std::tuple<Tensor, Tensor> sorted_output = output.sort(1, true);
             auto probs_acc = std::get<0>(sorted_output).accessor<float,2>();
             auto indices_acc = std::get<1>(sorted_output).accessor<int64_t,2>();
 
             for (int i = 0; i < output.size(0); ++i)
-            {
+              {
                 APIData results_ad;
                 std::vector<double> probs;
                 std::vector<std::string> cats;
 
                 for (int j = 0; j < best_count; ++j)
                 {
-                    probs.push_back(probs_acc[i][j]);
-                    int index = indices_acc[i][j];
-                    if (_seq_training)
+                  probs.push_back(probs_acc[i][j]);
+                  int index = indices_acc[i][j];
+                  if (_seq_training)
                     {
-                        cats.push_back(inputc.get_word(index));
+                      cats.push_back(inputc.get_word(index));
                     }
-                    else
+                  else
                     {
-                        cats.push_back(this->_mlmodel.get_hcorresp(index));
+                      cats.push_back(this->_mlmodel.get_hcorresp(index));
                     }
                 }
 
@@ -658,7 +675,8 @@ namespace dd
                 results_ad.add("nclasses", _nclasses);
 
                 results_ads.push_back(results_ad);
-            }
+              }
+          }
         }
 
         outputc.add_results(results_ads);
