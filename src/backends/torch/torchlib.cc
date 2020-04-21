@@ -327,6 +327,8 @@ namespace dd
         int64_t test_interval = 1;
         int64_t save_period = 0;
 
+        Tensor class_weights = {};
+
         // logging parameters
         int64_t log_batch_period = 20;
 
@@ -355,6 +357,20 @@ namespace dd
             if (ad_net.has("test_batch_size"))
                 test_batch_size = ad_net.get("test_batch_size").get<int>();
         }
+
+        if (ad_mllib.has("class_weights"))
+          {
+            std::vector<double> cwv = ad_mllib.get("class_weights").get<std::vector<double>>();
+            if (cwv.size() != _nclasses)
+              {
+                this->_logger->error("class weights given, but number of weights {} do not match number of classes {}, ignoring", cwv.size(), _nclasses);
+              }
+            else
+              {
+                this->_logger->info("using class weights");
+                class_weights = torch::from_blob(cwv.data(),{_nclasses});
+              }
+          }
 
         if (iter_size <= 0)
             iter_size = 1;
@@ -442,17 +458,20 @@ namespace dd
                 Tensor loss;
                 if (_seq_training)
                 {
-                    // Convert [n_batch, sequence_length, vocab_size] to [n_batch * sequence_length, vocab_size]
+                    // Convert [n_batch, sequence_length, vocab_size]
+                    // to [n_batch * sequence_length, vocab_size]
                     // + ignore non-masked tokens (== -1 in target)
                     loss = torch::nll_loss(
-                        torch::log_softmax(y_pred.view(IntList{-1, y_pred.size(2)}), 1),
-                        y.view(IntList{-1}),
-                        {}, Reduction::Mean, -1
-                    );
+                                 torch::log_softmax(y_pred.view(IntList{-1, y_pred.size(2)}), 1),
+                                 y.view(IntList{-1}),
+                                 class_weights, Reduction::Mean, -1
+                                 );
                 }
                 else
                 {
-                    loss = torch::nll_loss(torch::log_softmax(y_pred, 1), y.view(IntList{-1}));
+                    loss = torch::nll_loss(torch::log_softmax(y_pred, 1),
+                                           y.view(IntList{-1}),
+                                           class_weights);
                 }
                 if (iter_size > 1)
                     loss /= iter_size;
