@@ -55,6 +55,19 @@ namespace dd
     else
       bottom_seq = bottom_seqs[0];
 
+    caffe::LayerParameter *lparam = net_param->add_layers();
+    lparam->set_type("DummyData");
+    lparam->set_name(name + "_hidden_init");
+    lparam->add_top(name + "_h_init");
+    lparam->add_top(name + "_c_init");
+    caffe::DummyDataParameter *dparam = lparam->dummy_data_parameter();
+    caffe::BlobShape *b = dparam->add_shape();
+    b->add_dim(32);
+    b->add_dim(num_output);
+    b = dparam->add_shape();
+    b->add_dim(32);
+    b->add_dim(num_output);
+
     caffe::LayerParameter *lparam = net_param->add_layer();
     lparam->set_type(ctype);
     lparam->set_name(name);
@@ -62,10 +75,15 @@ namespace dd
       lparam->add_top(top);
     else
       lparam->add_top(ctype + std::to_string(id) + "_undropped");
+    lparam->add_top(name + "_final_h");
+    lparam->add_top(name + "_final_c");
     lparam->add_bottom(bottom_seq);
     lparam->add_bottom(bottom_cont);
+    lparam->add_bottom(name + "_h_init");
+    lparam->add_bottom(name + "_c_init");
     caffe::RecurrentParameter *rparam = lparam->mutable_recurrent_param();
     rparam->set_num_output(num_output);
+    rparam->set_expose_hidden(true);
     caffe::FillerParameter *weight_filler_param
         = rparam->mutable_weight_filler();
     weight_filler_param->set_type(weight_filler);
@@ -244,6 +262,11 @@ namespace dd
         else if ((pos = s.find(_affine_str)) != std::string::npos)
           {
             r_layers.push_back(_affine_str);
+            h_sizes.push_back(std::stoi(s.substr(pos + _affine_str.size())));
+          }
+        else if ((pos = s.find(_tile_str)) != std::string::npos)
+          {
+            r_layers.push_back(_tile_str);
             h_sizes.push_back(std::stoi(s.substr(pos + _affine_str.size())));
           }
         else

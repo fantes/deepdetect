@@ -80,6 +80,7 @@ namespace dd
     const std::string _lstm_str = "L";
     const std::string _rnn_str = "R";
     const std::string _affine_str = "A";
+    const std::string _tile_str = "T";
   };
 
   /**
