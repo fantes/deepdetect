@@ -72,6 +72,9 @@ namespace dd
                     const std::string weight_filler,
                     const std::string bias_filler, int nout, int nin);
 
+    void add_tile(caffe::NetParameter *net_param, const std::string layer_name,
+                  const std::string bottom_name, const std::string top_name);
+
     void parse_recurrent_layers(const std::vector<std::string> &layers,
                                 std::vector<std::string> &r_layers,
                                 std::vector<int> &h_sizes);

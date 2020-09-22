@@ -451,4 +451,27 @@ TEST(graphapi, complete_lstm_train_gpu)
   ASSERT_EQ(ok_str, joutstr);
   rmdir(csvts_repo.c_str());
 }
+
+TEST(graphapi, lstm_autoencoder_generation)
+{
+  JsonAPI japi;
+  std::string csvts_data = sinus + "train";
+  std::string csvts_test = sinus + "test";
+  std::string csvts_predict = sinus + "predict";
+  std::string csvts_repo = "csvts";
+  mkdir(csvts_repo.c_str(), 0777);
+  std::string sname = "my_service_csvts";
+  std::string jstr
+      = "{\"mllib\":\"torch\",\"description\":\"autoencoder\",\"type\":"
+        "\"supervised\",\"model\":{\"repository\":\""
+        + csvts_repo
+        + "\"},\"parameters\":{\"input\":{\"connector\":\"csvts\",\"label\":["
+          "\"output\"]},\"mllib\":{\"template\":\"recurrent\",\"layers\":["
+          "\"L10\",\"L10\",\"T\",\"L10\"],\"dropout\":[0.0,0.0,0.0],"
+          "\"regression\":true,"
+          "\"sl1sigma\":100.0,\"loss\":\"L1\"}}}";
+  std::string joutstr = japi.jrender(japi.service_create(sname, jstr));
+  ASSERT_EQ(created_str, joutstr);
+}
+
 #endif
