@@ -1,16 +1,22 @@
-cmake_minimum_required(VERSION 2.8.8)
 project(deepdetect)
+cmake_minimum_required(VERSION 3.14)
 
 option(RELEASE "release mode" OFF)
-option(USE_CAFFE2 "build caffe2 backend")
-option(USE_TF "use TF backend")
-option(USE_NCNN "use NCNN backend")
-option(USE_TORCH "use libtorch backend")
+option(USE_CAFFE "build caffe backend" ON)
+option(USE_CAFFE_DEBUG "enable caffe debug" OFF)
+option(USE_CAFFE2 "build caffe2 backend" OFF)
+option(USE_TF "use TF backend" OFF)
+option(USE_NCNN "use NCNN backend" OFF)
+option(USE_TORCH "use libtorch backend" OFF)
 option(USE_HDF5 "use HDF5" ON)
 option(USE_CAFFE "use Caffe backend" ON)
 option(USE_TENSORRT "use TensorRT backend" OFF)
 option(USE_TENSORRT_OSS "use TensorRT OSS parts" OFF)
+option(USE_XGBOOST "use XGBOOST backend" OFF)
+option(USE_XGBOOST_GPU "compile XGBOOST with CUDA" OFF)
 option(USE_DLIB "use Dlib backend" OFF)
+option(USE_CUDNN "enable CUDNN" OFF)
+option(USE_TSNE "enable TSNE" OFF)
 option(USE_CUDA_CV "use CUDA with OpenCV (Requires OpenCV build for CUDA)" OFF)
 option(USE_SIMSEARCH "build index and search services" OFF)
 option(USE_ANNOY "use annoy as indexer" OFF)
@@ -948,42 +954,50 @@ if (USE_TENSORRT)
     include_directories(${TENSORRT_INC_DIR})
 endif()
 
-# main library, main & tests
-include_directories ("${PROJECT_SOURCE_DIR}/src")
-include_directories(${CMAKE_BINARY_DIR}/src)
-add_subdirectory (src)
+if (USE_HTTP_SERVER)
+    ExternalProject_Add(
+        cpp-netlib
+        PREFIX cpp-netlib
+        URL http://downloads.cpp-netlib.org/0.13.0/cpp-netlib-0.13.0-final.tar.gz
+        URL_HASH SHA256=8cf190034b8dd10423ad63fadcb7e2ab0366625386c9863d7f28e9fb375821c7
+        BUILD_IN_SOURCE true
+        CMAKE_ARGS
+            -DCMAKE_BUILD_TYPE=$CMAKE_BUILD_TYPE
+            -DCPP-NETLIB_BUILD_EXAMPLES=OFF
+            -DCPP-NETLIB_BUILD_TESTS=OFF
+        INSTALL_COMMAND ""
+    )
+    set(HTTP_LIB_DEPS ${CMAKE_BINARY_DIR}/cpp-netlib/src/cpp-netlib/libs/network/src/libcppnetlib-uri.a crypto ssl)
+    set(HTTP_INCLUDE_DIR "SYSTEM ${CMAKE_BINARY_DIR}/cpp-netlib/src/cpp-netlib")
+endif()
 
-# Flags used by the subdirectories
+# main library, main & tests
+include_directories("${PROJECT_SOURCE_DIR}/src")
+include_directories(${CMAKE_BINARY_DIR}/src)
+add_subdirectory(src)
+
+set(COMMON_INCLUDE_DIRS ${Boost_INCLUDE_DIRS} ${HTTP_INCLUDE_DIR})
+
 if (CUDA_FOUND)
-  set(COMMON_INCLUDE_DIRS ${Boost_INCLUDE_DIRS} ${CUDA_INCLUDE_DIRS})
-else()
-  set(COMMON_INCLUDE_DIRS ${Boost_INCLUDE_DIRS})
+    list(APPEND COMMON_INCLUDE_DIRS ${CUDA_INCLUDE_DIRS})
 endif()
+
 set(COMMON_LINK_DIRS
-  ${DLIB_LIB_DIR}
-  ${TENSORRT_LIB_DIR}
-  ${CAFFE_LIB_DIR}
-  ${CAFFE2_LIB_DIR}
-  ${TF_LIB_DIR}
-  ${XGBOOST_LIB_DIR}
-  ${TSNE_LIB_DIR}
-  ${NCNN_LIB_DIR}
-  ${FAISS_LIB_DIR}
-  ${TORCH_LIB_DIR})
-if (USE_HDF5)
-  set(COMMON_LINK_LIBS
-    ddetect ${DLIB_LIB_DEPS} ${TENSORRT_LIBS} ${CUDA_LIB_DEPS} glog gflags ${OpenCV_LIBS} curlpp curl hdf5_cpp ${Boost_LIBRARIES} archive
-    ${CAFFE_LIB_DEPS}
-    ${CAFFE2_LIB_DEPS}
-    ${TF_LIB_DEPS}
-    ${XGBOOST_LIB_DEPS}
-    ${TSNE_LIB_DEPS}
-    ${NCNN_LIB_DEPS}
-    ${FAISS_LIB_DEPS}
-    ${TORCH_LIB_DEPS})
-else()
-  set(COMMON_LINK_LIBS
+    ${DLIB_LIB_DIR}
+    ${TENSORRT_LIB_DIR}
+    ${CAFFE_LIB_DIR}
+    ${CAFFE2_LIB_DIR}
+    ${TF_LIB_DIR}
+    ${XGBOOST_LIB_DIR}
+    ${TSNE_LIB_DIR}
+    ${NCNN_LIB_DIR}
+    ${FAISS_LIB_DIR}
+    ${TORCH_LIB_DIR}
+)
+
+set(COMMON_LINK_LIBS
     ddetect ${DLIB_LIB_DEPS} ${TENSORRT_LIBS} ${CUDA_LIB_DEPS} glog gflags ${OpenCV_LIBS} curlpp curl ${Boost_LIBRARIES} archive
+    ${HTTP_LIB_DEPS}
     ${CAFFE_LIB_DEPS}
     ${CAFFE2_LIB_DEPS}
     ${TF_LIB_DEPS}
@@ -991,9 +1005,11 @@ else()
     ${TSNE_LIB_DEPS}
     ${NCNN_LIB_DEPS}
     ${FAISS_LIB_DEPS}
-    ${TORCH_LIB_DEPS})
+    ${TORCH_LIB_DEPS}
+)
+if (USE_HDF5)
+    list(APPEND COMMON_LINK_LIBS hdf5_cpp)
 endif()
-set(HTTP_LINK_LIBS cppnetlib-uri crypto ssl)
 
 add_subdirectory(main)
 
@@ -1053,5 +1069,26 @@ configure_file (
 )
 
 # status
-message(STATUS "Build Tests          : ${BUILD_TESTS}")
-message(STATUS "Caffe DEBUG          : ${USE_CAFFE_DEBUG}")
+message(STATUS "RELEASE:               ${RELEASE}")
+message(STATUS "USE_COMMAND_LINE:      ${USE_COMMAND_LINE}")
+message(STATUS "USE_JSON_API:          ${USE_JSON_API}")
+message(STATUS "USE_HTTP_SERVER:       ${USE_HTTP_SERVER}")
+message(STATUS "BUILD_TESTS:           ${BUILD_TESTS}")
+message(STATUS "BUILD_TOOLS:           ${BUILD_TOOLS}")
+message(STATUS "USE_CAFFE:             ${USE_CAFFE}")
+message(STATUS "USE_CAFFE_DEBUG:       ${USE_CAFFE_DEBUG}")
+message(STATUS "USE_CAFFE2:            ${USE_CAFFE2}")
+message(STATUS "USE_TORCH:             ${USE_TORCH}")
+message(STATUS "USE_SIMSEARCH:         ${USE_SIMSEARCH}")
+message(STATUS "USE_TF:                ${USE_TF}")
+message(STATUS "USE_NCNN:              ${USE_NCNN}")
+message(STATUS "USE_HDF5:              ${USE_HDF5}")
+message(STATUS "USE_TENSORRT:          ${USE_TENSORRT}")
+message(STATUS "USE_TENSORRT_OSS:      ${USE_TENSORRT_OSS}")
+message(STATUS "USE_DLIB:              ${USE_DLIB}")
+message(STATUS "USE_ANNOY:             ${USE_ANNOY}")
+message(STATUS "USE_FAISS:             ${USE_FAISS}")
+message(STATUS "USE_CUDNN:             ${USE_CUDNN}")
+message(STATUS "USE_XGBOOST:           ${USE_XGBOOST}")
+message(STATUS "USE_XGBOOST_GPU:       ${USE_XGBOOST_GPU}")
+message(STATUS "USE_TSNE:              ${USE_TSNE}")
