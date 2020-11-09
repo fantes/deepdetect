@@ -65,23 +65,29 @@ namespace dd
 
     if (_solver_type == "ADAM")
       {
-        _optimizer
-            = std::unique_ptr<torch::optim::Optimizer>(new torch::optim::Adam(
-                module.parameters(), torch::optim::AdamOptions(_base_lr)));
+        _optimizer = std::unique_ptr<torch::optim::Optimizer>(
+            new torch::optim::Adam(module.parameters(),
+                                   torch::optim::AdamOptions(_base_lr)
+                                       .betas(std::make_tuple(_beta1, _beta2))
+                                       .weight_decay(_weight_decay)));
         this->_logger->info("base_lr: {}", _base_lr);
       }
     else if (_solver_type == "RMSPROP")
       {
         _optimizer = std::unique_ptr<torch::optim::Optimizer>(
-            new torch::optim::RMSprop(module.parameters(),
-                                      torch::optim::RMSpropOptions(_base_lr)));
+            new torch::optim::RMSprop(
+                module.parameters(),
+                torch::optim::RMSpropOptions(_base_lr).weight_decay(
+                    _weight_decay)));
         this->_logger->info("base_lr: {}", _base_lr);
       }
     else if (_solver_type == "ADAGRAD")
       {
         _optimizer = std::unique_ptr<torch::optim::Optimizer>(
-            new torch::optim::Adagrad(module.parameters(),
-                                      torch::optim::AdagradOptions(_base_lr)));
+            new torch::optim::Adagrad(
+                module.parameters(),
+                torch::optim::AdagradOptions(_base_lr).weight_decay(
+                    _weight_decay)));
         this->_logger->info("base_lr: {}", _base_lr);
       }
     else if (_solver_type == "RANGER" || _solver_type == "RANGER_PLUS")
@@ -128,7 +134,7 @@ namespace dd
     torch::save(*_optimizer, sfile);
   }
 
-  int TorchSolver::load(std::string sstate)
+  int TorchSolver::load(std::string sstate, torch::Device device)
   {
     if (!sstate.empty())
       {
@@ -140,7 +146,7 @@ namespace dd
         _logger->info("loading " + sstate);
         try
           {
-            torch::load(*_optimizer, sstate);
+            torch::load(*_optimizer, sstate, device);
           }
         catch (std::exception &e)
           {

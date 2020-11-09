@@ -37,7 +37,7 @@
 
 #include "native/native.h"
 #include "torchsolver.h"
-#include "torchUtils.h"
+#include "torchutils.h"
 
 using namespace torch;
 
@@ -141,7 +141,12 @@ namespace dd
     if (lib_ad.has("template"))
       _template = lib_ad.get("template").get<std::string>();
     if (lib_ad.has("gpu"))
-      gpu = lib_ad.get("gpu").get<bool>() && torch::cuda::is_available();
+      gpu = lib_ad.get("gpu").get<bool>();
+    if (gpu && !torch::cuda::is_available())
+      {
+        throw MLLibBadParamException(
+            "GPU is not available, service could not be created");
+      }
     if (lib_ad.has("gpuid"))
       gpuid = lib_ad.get("gpuid").get<int>();
     if (lib_ad.has("nclasses"))
@@ -374,7 +379,6 @@ namespace dd
 
     TInputConnectorStrategy inputc(this->_inputc);
     inputc._train = true;
-    inputc._finetuning = _finetuning;
 
     APIData ad_input = ad.getobj("parameters").getobj("input");
     if (ad_input.has("shuffle"))
@@ -471,7 +475,7 @@ namespace dd
 
     int it = 0;
     // reload solver and set it value accordingly
-    it = tsolver.load(this->_mlmodel._sstate);
+    it = tsolver.load(this->_mlmodel._sstate, _device);
     tsolver.zero_grad();
     _module.train();
 
