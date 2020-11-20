@@ -71,8 +71,7 @@ namespace dd
     TorchInputInterface(const TorchInputInterface &i)
         : _lm_params(i._lm_params), _dataset(i._dataset),
           _test_dataset(i._test_dataset), _input_format(i._input_format),
-          _ntargets(i._ntargets), _tilogger(i._tilogger), _db(i._db),
-          _split_ts_for_predict(i._split_ts_for_predict)
+          _ntargets(i._ntargets), _tilogger(i._tilogger), _db(i._db)
     {
     }
 
@@ -174,8 +173,6 @@ namespace dd
     std::string _backend
         = "lmdb"; /**< db backend (currently only lmdb is supported) */
     std::string _correspname = "corresp.txt"; /**< "corresp file default name*/
-    bool _split_ts_for_predict
-        = false; /**< prevent to split timeseries in predict mode */
   };
 
   /**
@@ -429,7 +426,8 @@ namespace dd
      */
     CSVTSTorchInputFileConn(const CSVTSTorchInputFileConn &i)
         : CSVTSInputFileConn(i), TorchInputInterface(i), _offset(i._offset),
-          _timesteps(i._timesteps), _datadim(i._datadim)
+          _timesteps(i._timesteps), _datadim(i._datadim),
+          _forecast(i._forecast)
     {
     }
 
@@ -498,6 +496,19 @@ namespace dd
         }
       if (ad_input.has("offset"))
         _offset = ad_input.get("offset").get<int>();
+
+      if (ad_input.has("forecast"))
+        _forecast = ad_input.get("forecast").get<int>();
+
+      if (_forecast > 0 && _forecast >= _timesteps)
+        {
+          this->_logger->error("forecast value " + std::to_string(_forecast)
+                               + "  >= timesteps "
+                               + std::to_string(_timesteps));
+          throw InputConnectorBadParamException(
+              "forecast value " + std::to_string(_forecast) + "  >= timesteps "
+              + std::to_string(_timesteps));
+        }
     }
 
     /**
@@ -524,10 +535,27 @@ namespace dd
       return 1;
     }
 
+  private:
+    void add_data_instance_forecast(const long int tstart, const int vecindex,
+                                    TorchDataset &dataset,
+                                    const std::vector<CSVline> &seq);
+    void fill_dataset_forecast(TorchDataset &dataset,
+                               const std::vector<std::vector<CSVline>> *data);
+    void add_data_instance_labels(const long int tstart, const int vecindex,
+                                  TorchDataset &dataset,
+                                  const std::vector<CSVline> &seq);
+    void fill_dataset_labels(TorchDataset &dataset,
+                             const std::vector<std::vector<CSVline>> *data);
+
+    void discard_warn(int vecindex, unsigned int seq_size,
+                      const std::vector<std::vector<CSVline>> *data);
+
+  public:
     int _offset = -1;    /**< default offset for building sequences: start of
                             sequences is at 0, offset, 2xoffset ... */
     int _timesteps = -1; /**< default empty value for timesteps */
     int _datadim = -1;   /**< default empty value for datapoints */
+    int _forecast = -1;  /**< length of forecast : will not honor labels*/
   };
 } // namespace dd
 

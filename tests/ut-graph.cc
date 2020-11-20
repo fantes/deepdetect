@@ -652,7 +652,7 @@ TEST(graphapi, complete_extract_layer)
         + csvts_data + "\",\"" + csvts_test + "\"]}";
   std::cerr << "jtrainstr=" << jtrainstr << std::endl;
   joutstr = japi.jrender(japi.service_train(jtrainstr));
-  std::cout << "joutstr=" << joutstr << std::endl;
+  //  std::cout << "joutstr=" << joutstr << std::endl;
   JDoc jd;
   jd.Parse<rapidjson::kParseNanAndInfFlag>(joutstr.c_str());
   ASSERT_TRUE(!jd.HasParseError());
@@ -692,7 +692,7 @@ TEST(graphapi, complete_extract_layer)
   std::string uri = jd["body"]["predictions"][0]["uri"].GetString();
   ASSERT_EQ("../examples/all/sinus/predict/seq_2.csv #0_998", uri);
   ASSERT_TRUE(jd["body"]["predictions"][0]["vals"].IsArray());
-  ASSERT_EQ(jd["body"]["predictions"][0]["vals"].Size(), 9990);
+  ASSERT_EQ(jd["body"]["predictions"][0]["vals"].Size(), 200);
 
   //  remove service
   jstr = "{\"clear\":\"full\"}";
@@ -773,14 +773,14 @@ TEST(graphapi, complete_extract_layer_gpu)
         + str_min_vals + ",\"max_vals\":" + str_max_vals
         + "},\"output\":{}},\"data\":[\"" + csvts_predict + "\"]}";
   joutstr = japi.jrender(japi.service_predict(jpredictstr));
-  std::cout << "joutstr=" << joutstr << std::endl;
+  // std::cout << "joutstr=" << joutstr << std::endl;
   jd.Parse<rapidjson::kParseNanAndInfFlag>(joutstr.c_str());
   ASSERT_TRUE(!jd.HasParseError());
   ASSERT_EQ(200, jd["status"]["code"]);
   std::string uri = jd["body"]["predictions"][0]["uri"].GetString();
   ASSERT_EQ("../examples/all/sinus/predict/seq_2.csv #0_998", uri);
   ASSERT_TRUE(jd["body"]["predictions"][0]["vals"].IsArray());
-  ASSERT_EQ(jd["body"]["predictions"][0]["vals"].Size(), 9990);
+  ASSERT_EQ(jd["body"]["predictions"][0]["vals"].Size(), 200);
 
   //  remove service
   jstr = "{\"clear\":\"full\"}";

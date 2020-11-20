@@ -116,8 +116,17 @@ namespace dd
       {
         if (!inputc._dont_scale_labels)
           {
-            double max = inputc._max_vals[inputc._label_pos[k]];
-            double min = inputc._min_vals[inputc._label_pos[k]];
+            double max, min;
+            if (inputc._label_pos.size() > 0) // labels case
+              {
+                max = inputc._max_vals[inputc._label_pos[k]];
+                min = inputc._min_vals[inputc._label_pos[k]];
+              }
+            else // forecast case
+              {
+                max = inputc._max_vals[k];
+                min = inputc._min_vals[k];
+              }
             if (inputc._scale_between_minus1_and_1)
               val += 0.5;
             val = val * (max - min) + min;
@@ -828,8 +837,6 @@ namespace dd
 
     bool lstm_continuation = false;
     TInputConnectorStrategy inputc(this->_inputc);
-    if (_module._native != nullptr)
-      _module._native->update_input_connector(inputc);
 
     this->_stats.transform_start();
     TOutputConnectorStrategy outputc(this->_outputc);
@@ -1052,8 +1059,7 @@ namespace dd
                     for (int t = 0; t < output.size(1); ++t)
                       {
                         std::vector<double> preds;
-                        for (unsigned int k = 0; k < this->_inputc._ntargets;
-                             ++k)
+                        for (unsigned int k = 0; k < inputc._ntargets; ++k)
                           {
                             double res = output_acc[j][t][k];
                             preds.push_back(unscale(res, k, inputc));
@@ -1172,7 +1178,7 @@ namespace dd
                 std::vector<double> targets;
                 std::vector<double> predictions;
                 for (int t = 0; t < labels.size(1); ++t)
-                  for (unsigned int k = 0; k < this->_inputc._ntargets; ++k)
+                  for (unsigned int k = 0; k < inputc._ntargets; ++k)
                     {
                       targets.push_back(target_acc[j][t][k]);
                       predictions.push_back(output_acc[j][t][k]);
@@ -1245,7 +1251,7 @@ namespace dd
     if (_timeserie)
       {
         ad_res.add("timeserie", true);
-        ad_res.add("timeseries", (int)this->_inputc._ntargets);
+        ad_res.add("timeseries", (int)inputc._ntargets);
       }
     else
       {
