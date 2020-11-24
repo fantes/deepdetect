@@ -1,4 +1,14 @@
 # main library
+
+set_source_files_properties(
+  ${CMAKE_BINARY_DIR}/src/caffe.pb.cc
+  ${CMAKE_BINARY_DIR}/src/caffe.pb.h
+  PROPERTIES GENERATED TRUE)
+set_source_files_properties(
+  ${CMAKE_BINARY_DIR}/src/caffe.pb.cc
+  ${CMAKE_BINARY_DIR}/src/caffe.pb.h
+  PROPERTIES COMPILE_FLAGS -Wno-unused-parameter)
+
 if (USE_DD_SYSLOG)
   add_definitions(-DUSE_DD_SYSLOG)
 endif()
@@ -18,6 +28,12 @@ if (USE_JSON_API)
 endif()
 if (USE_HTTP_SERVER)
   list(APPEND ddetect_SOURCES httpjsonapi.cc httpjsonapi.h)
+endif()
+if (USE_HTTP_SERVER_OATPP)
+  list(APPEND ddetect_SOURCES oatppjsonapi.cc oatppjsonapi.h http/app_component.hpp http/swagger_component.hpp http/controller.hpp http/error_handler.hpp http/error_handler.cpp)
+endif()
+if (USE_HTTP_SERVER OR USE_HTTP_SERVER_OATPP)
+  list(APPEND ddetect_SOURCES http/flags.h)
 endif()
 if (USE_COMMAND_LINE AND USE_JSON_API)
   list(APPEND ddetect_SOURCES commandlinejsonapi.h commandlinejsonapi.cc)
@@ -121,7 +137,9 @@ if (USE_TENSORRT)
   endif()
 endif()
 
+
 add_library(ddetect ${ddetect_SOURCES})
+add_dependencies(ddetect caffe_pb_h)
 if (USE_DLIB)
   add_dependencies(ddetect protobuf dlib)
 endif()
@@ -156,7 +174,10 @@ if (USE_TNSE)
   add_dependencies(ddetect protobuf Multicore-TSNE)
 endif()
 if (USE_HTTP_SERVER)
-  add_dependencies(ddetect cpp-netlib)
+    add_dependencies(ddetect cpp-netlib)
+endif()
+if (USE_HTTP_SERVER_OATPP)
+  add_dependencies(ddetect oatpp oatpp-swagger oatpp-zlib)
 endif()
 if (BUILD_SPDLOG)
   add_dependencies(ddetect spdlog)
