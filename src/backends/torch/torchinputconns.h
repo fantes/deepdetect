@@ -199,7 +199,9 @@ namespace dd
         : ImgInputFileConn(i), TorchInputInterface(i)
     {
       _dataset._inputc = this;
+      _dataset._image = true;
       _test_dataset._inputc = this;
+      _test_dataset._image = true;
       set_db_transaction_size(TORCH_IMG_TRANSACTION_SIZE);
     }
 
@@ -238,7 +240,8 @@ namespace dd
     void read_image_folder(std::vector<std::pair<std::string, int>> &lfiles,
                            std::unordered_map<int, std::string> &hcorresp,
                            std::unordered_map<std::string, int> &hcorresp_r,
-                           const std::string &folderPath);
+                           const std::string &folderPath,
+                           const bool &test = false);
 
     /**
      * \brief read images from txt list
@@ -430,7 +433,8 @@ namespace dd
     CSVTSTorchInputFileConn(const CSVTSTorchInputFileConn &i)
         : CSVTSInputFileConn(i), TorchInputInterface(i), _offset(i._offset),
           _timesteps(i._timesteps), _datadim(i._datadim),
-          _forecast(i._forecast)
+          _forecast_timesteps(i._forecast_timesteps),
+          _backcast_timesteps(i._backcast_timesteps)
     {
       _dataset._inputc = this;
       _test_dataset._inputc = this;
@@ -493,26 +497,43 @@ namespace dd
                 }
             }
         }
-      _offset = _timesteps;
       if (ad_input.has("timesteps"))
         {
           _timesteps = ad_input.get("timesteps").get<int>();
           _offset = _timesteps;
         }
+
+      if (ad_input.has("forecast_timesteps"))
+        {
+          _forecast_timesteps = ad_input.get("forecast_timesteps").get<int>();
+        }
+
+      if (ad_input.has("backcast_timesteps"))
+        {
+          _backcast_timesteps = ad_input.get("backcast_timesteps").get<int>();
+          _offset = _backcast_timesteps;
+        }
+
       if (ad_input.has("offset"))
         _offset = ad_input.get("offset").get<int>();
 
-      if (ad_input.has("forecast"))
-        _forecast = ad_input.get("forecast").get<int>();
-
-      if (_forecast > 0 && _forecast >= _timesteps)
+      if ((_forecast_timesteps >= 0 && _backcast_timesteps <= 0)
+          || (_forecast_timesteps <= 0 && _backcast_timesteps >= 0))
         {
-          this->_logger->error("forecast value " + std::to_string(_forecast)
-                               + "  >= timesteps "
-                               + std::to_string(_timesteps));
-          throw InputConnectorBadParamException(
-              "forecast value " + std::to_string(_forecast) + "  >= timesteps "
-              + std::to_string(_timesteps));
+          std::string errmsg
+              = "forecast value and backcast value should be both specified";
+          this->_logger->error(errmsg);
+          throw InputConnectorBadParamException(errmsg);
+        }
+
+      if (_forecast_timesteps > 0 && _forecast_timesteps > _backcast_timesteps)
+        {
+          std::string errmsg = "forecast value "
+                               + std::to_string(_forecast_timesteps)
+                               + "  >= backcast_timesteps "
+                               + std::to_string(_backcast_timesteps);
+          this->_logger->error(errmsg);
+          throw InputConnectorBadParamException(errmsg);
         }
     }
 
@@ -521,7 +542,9 @@ namespace dd
      */
     int channels() const
     {
-      return _timesteps;
+      if (_timesteps > 0)
+        return _timesteps;
+      return _forecast_timesteps + _backcast_timesteps;
     }
 
     /**
@@ -541,26 +564,26 @@ namespace dd
     }
 
   private:
+    void fill_dataset_forecast(TorchDataset &dataset, bool test);
     void add_data_instance_forecast(const long int tstart, const int vecindex,
                                     TorchDataset &dataset,
                                     const std::vector<CSVline> &seq);
-    void fill_dataset_forecast(TorchDataset &dataset,
-                               const std::vector<std::vector<CSVline>> *data);
+    void fill_dataset_labels(TorchDataset &dataset, bool test);
     void add_data_instance_labels(const long int tstart, const int vecindex,
                                   TorchDataset &dataset,
                                   const std::vector<CSVline> &seq);
-    void fill_dataset_labels(TorchDataset &dataset,
-                             const std::vector<std::vector<CSVline>> *data);
 
-    void discard_warn(int vecindex, unsigned int seq_size,
-                      const std::vector<std::vector<CSVline>> *data);
+    void discard_warn(int vecindex, unsigned int seq_size, bool test);
 
   public:
     int _offset = -1;    /**< default offset for building sequences: start of
                             sequences is at 0, offset, 2xoffset ... */
     int _timesteps = -1; /**< default empty value for timesteps */
     int _datadim = -1;   /**< default empty value for datapoints */
-    int _forecast = -1;  /**< length of forecast : will not honor labels*/
+    int _forecast_timesteps
+        = -1; /**< length of forecast :  if > 0, labels will be ignored */
+    int _backcast_timesteps
+        = -1; /**< length of backcast :  if > 0, labels will be ignored */
   };
 } // namespace dd
 

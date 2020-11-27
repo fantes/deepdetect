@@ -109,7 +109,7 @@ namespace dd
       std::vector<std::pair<std::string, int>> &lfiles,
       std::unordered_map<int, std::string> &hcorresp,
       std::unordered_map<std::string, int> &hcorresp_r,
-      const std::string &folderPath)
+      const std::string &folderPath, const bool &test)
   {
     _logger->info("Reading image folder {}", folderPath);
 
@@ -117,6 +117,7 @@ namespace dd
     // backends
     int cl = 0;
 
+    std::unordered_map<std::string, int>::const_iterator hcit;
     std::unordered_set<std::string> subdirs;
     if (fileops::list_directory(folderPath, false, true, false, subdirs))
       throw InputConnectorBadParamException(
@@ -130,8 +131,18 @@ namespace dd
           throw InputConnectorBadParamException(
               "failed reading image train data sub-directory " + (*uit));
         std::string cls = dd_utils::split((*uit), '/').back();
-        hcorresp.insert(std::pair<int, std::string>(cl, cls));
-        hcorresp_r.insert(std::pair<std::string, int>(cls, cl));
+        if (!test)
+          {
+            hcorresp.insert(std::pair<int, std::string>(cl, cls));
+            hcorresp_r.insert(std::pair<std::string, int>(cls, cl));
+          }
+        else
+          {
+            if ((hcit = hcorresp_r.find(cls)) != hcorresp_r.end())
+              cl = (*hcit).second;
+            else
+              _logger->warn("unknown class {} in test set", cls);
+          }
         auto fit = subdir_files.begin();
         while (
             fit
@@ -140,7 +151,8 @@ namespace dd
             lfiles.push_back(std::pair<std::string, int>((*fit), cl));
             ++fit;
           }
-        ++cl;
+        if (!test)
+          ++cl;
         ++uit;
       }
   }
@@ -249,15 +261,8 @@ namespace dd
                 read_image_folder(lfiles, hcorresp, hcorresp_r, _uris.at(0));
                 if (_uris.size() > 1)
                   {
-                    std::unordered_map<int, std::string>
-                        test_hcorresp; // correspondence class number / class
-                                       // name
-                    std::unordered_map<std::string, int>
-                        test_hcorresp_r; // reverse correspondence for test
-                                         // set.
-
-                    read_image_folder(test_lfiles, test_hcorresp,
-                                      test_hcorresp_r, _uris.at(1));
+                    read_image_folder(test_lfiles, hcorresp, hcorresp_r,
+                                      _uris.at(1), true);
                   }
 
                 if (_dataset._shuffle)
@@ -640,6 +645,14 @@ namespace dd
 
   void CSVTSTorchInputFileConn::set_datadim(bool is_test_data)
   {
+    if ((_forecast_timesteps < 0 || _backcast_timesteps < 0) && _timesteps < 0)
+      {
+        std::string errmsg
+            = "no value given to [forecast_|backcast_|]timesteps";
+        this->_logger->error(errmsg);
+        throw InputConnectorBadParamException(errmsg);
+      }
+
     if (_train && _ntargets != _label.size())
       {
         _logger->warn(
@@ -659,8 +672,52 @@ namespace dd
     else
       _datadim = _csvtsdata[0][0]._v.size();
 
-    if (_ntargets == 0 && _forecast > 0)
+    if (_ntargets == 0 && _forecast_timesteps > 0)
       _ntargets = _datadim;
+
+    std::vector<int> lpos = _label_pos;
+    _label_pos.clear();
+    for (int lp : lpos)
+      if (lp != -1)
+        _label_pos.push_back(lp);
+
+    _logger->info("whole data dimension : " + std::to_string(_datadim));
+
+    std::string ign;
+    for (std::string i : _ignored_columns)
+      ign += "'" + i + "' ";
+    _logger->info(std::to_string(_ignored_columns.size())
+                  + " ignored colums asked for: " + ign);
+
+    std::string labels;
+    for (std::string l : _label)
+      labels += "'" + l + "' ";
+    _logger->info(std::to_string(_label.size())
+                  + " labels (outputs) asked for: " + labels);
+
+    std::vector<std::string> col_vec;
+    for (std::string c : _columns)
+      col_vec.push_back(c);
+
+    std::string labels_found;
+    for (auto i : _label_pos)
+      labels_found += "'" + col_vec[i] + "' ";
+    _logger->info(std::to_string(_label_pos.size())
+                  + " labels (outputs) found: " + labels_found);
+
+    std::string inputs_found;
+    for (unsigned int i = 0; i < _columns.size(); ++i)
+      {
+        if (std::find(_label_pos.begin(), _label_pos.end(), i)
+                == _label_pos.end()
+            && std::find(_ignored_columns.begin(), _ignored_columns.end(),
+                         col_vec[i])
+                   == _ignored_columns.end())
+          inputs_found += "'" + col_vec[i] + "' ";
+      }
+
+    _logger->info(std::to_string(_datadim - _label_pos.size())
+                  + " inputs  : " + inputs_found);
   }
 
   void CSVTSTorchInputFileConn::transform(const APIData &ad)
@@ -690,7 +747,10 @@ namespace dd
       {
         // in test mode, prevent connector to create different series based on
         // offset
-        _offset = _timesteps;
+        if (_timesteps > 0)
+          _offset = _timesteps;
+        else
+          _offset = _backcast_timesteps + _forecast_timesteps;
         fill_dataset(_dataset, false);
         _csvtsdata.clear();
         _csvtsdata_test.clear();
@@ -704,8 +764,9 @@ namespace dd
     std::vector<at::Tensor> data_sequence;
     if (_fnames.size() > static_cast<unsigned int>(vecindex))
       _ids.push_back(_fnames[vecindex] + " #" + std::to_string(tstart) + "_"
-                     + std::to_string(tstart + _timesteps - 1));
-    for (long int ti = tstart; ti < tstart + _timesteps - _forecast; ++ti)
+                     + std::to_string(tstart + _forecast_timesteps
+                                      + _backcast_timesteps - 1));
+    for (long int ti = tstart; ti < tstart + _backcast_timesteps; ++ti)
       {
         std::vector<double> datavec;
         for (int di = 0; di < this->_datadim; ++di)
@@ -719,11 +780,12 @@ namespace dd
       }
     at::Tensor dst = torch::stack(data_sequence);
 
-    if (static_cast<int>(seq.size()) >= _timesteps + tstart)
+    if (static_cast<int>(seq.size())
+        >= _backcast_timesteps + _forecast_timesteps + tstart)
       {
         std::vector<at::Tensor> pred_sequence;
-        for (long int ti = tstart + _timesteps - _forecast;
-             ti < tstart + _timesteps; ++ti)
+        for (long int ti = tstart + _backcast_timesteps;
+             ti < tstart + _backcast_timesteps + _forecast_timesteps; ++ti)
           {
             std::vector<double> predvec;
             for (int di = 0; di < this->_datadim; ++di)
@@ -742,15 +804,16 @@ namespace dd
       dataset.add_batch({ dst }, {});
   }
 
-  void CSVTSTorchInputFileConn::discard_warn(
-      int vecindex, unsigned int seq_size,
-      const std::vector<std::vector<CSVline>> *data)
+  void CSVTSTorchInputFileConn::discard_warn(int vecindex,
+                                             unsigned int seq_size, bool test)
   {
+    int tsteps = _timesteps > 0 ? _timesteps
+                                : _backcast_timesteps + _forecast_timesteps;
     std::string errmsg = "data does not contains enough timesteps, "
                          "discarding (seq_size:"
                          + std::to_string(seq_size)
-                         + " _timesteps:" + std::to_string(_timesteps);
-    if (data == &this->_csvtsdata_test)
+                         + " timesteps:" + std::to_string(tsteps);
+    if (test)
       {
         if (static_cast<unsigned int>(vecindex) < _test_fnames.size())
           errmsg = "file " + _test_fnames[vecindex]
@@ -767,58 +830,43 @@ namespace dd
     _tilogger->warn(errmsg);
   }
 
-  void CSVTSTorchInputFileConn::fill_dataset_forecast(
-      TorchDataset &dataset, const std::vector<std::vector<CSVline>> *data)
+  void CSVTSTorchInputFileConn::fill_dataset_forecast(TorchDataset &dataset,
+                                                      bool test)
   {
+    std::vector<std::vector<CSVline>> &data
+        = test ? this->_csvtsdata_test : this->_csvtsdata;
+
     int vecindex = -1;
 
-    for (const std::vector<CSVline> &seq : *data)
+    for (const std::vector<CSVline> &seq : data)
       {
         vecindex++;
         if (_train)
           {
             long int tstart = 0;
-            if (static_cast<long int>(seq.size()) < _timesteps)
+            if (static_cast<long int>(seq.size())
+                < _backcast_timesteps + _forecast_timesteps)
               {
-                discard_warn(vecindex, seq.size(), data);
+                discard_warn(vecindex, seq.size(), test);
                 continue;
               }
-            for (; tstart + _timesteps < static_cast<long int>(seq.size());
+            for (; tstart + _backcast_timesteps + _forecast_timesteps
+                   < static_cast<long int>(seq.size());
                  tstart += _offset)
               add_data_instance_forecast(tstart, vecindex, dataset, seq);
             if (tstart < static_cast<long int>(seq.size()) - 1)
-              add_data_instance_forecast(seq.size() - _timesteps, vecindex,
-                                         dataset, seq);
+              add_data_instance_forecast(seq.size() - _backcast_timesteps
+                                             - _forecast_timesteps,
+                                         vecindex, dataset, seq);
           }
         else // predict
           {
-            if (static_cast<long int>(seq.size()) < _timesteps - _forecast)
+            if (static_cast<long int>(seq.size()) < _backcast_timesteps)
               {
-                discard_warn(vecindex, seq.size(), data);
-                std::string errmsg
-                    = "data does not contains enough timesteps, "
-                      "discarding (seq_size:"
-                      + std::to_string(seq.size())
-                      + " _timesteps:" + std::to_string(_timesteps);
-                if (data == &this->_csvtsdata_test)
-                  {
-                    if (static_cast<unsigned int>(vecindex)
-                        < _test_fnames.size())
-                      errmsg = "file " + _test_fnames[vecindex]
-                               + " does not contains enough timesteps, "
-                                 "discarding";
-                  }
-                else
-                  {
-                    if (static_cast<unsigned int>(vecindex) < _fnames.size())
-                      errmsg = "file " + _fnames[vecindex]
-                               + " does not contains enough timesteps, "
-                                 "discarding";
-                  }
-                _tilogger->warn(errmsg);
+                discard_warn(vecindex, seq.size(), test);
                 continue;
               }
-            add_data_instance_forecast(seq.size() - _timesteps + _forecast,
+            add_data_instance_forecast(seq.size() - _backcast_timesteps,
                                        vecindex, dataset, seq);
           }
       }
@@ -880,25 +928,20 @@ namespace dd
     dataset.add_batch({ dst }, { lst });
   }
 
-  void CSVTSTorchInputFileConn::fill_dataset_labels(
-      TorchDataset &dataset, const std::vector<std::vector<CSVline>> *data)
+  void CSVTSTorchInputFileConn::fill_dataset_labels(TorchDataset &dataset,
+                                                    bool test)
   {
     int vecindex = -1;
+    std::vector<std::vector<CSVline>> &data
+        = test ? this->_csvtsdata_test : this->_csvtsdata;
 
-    for (const std::vector<CSVline> &seq : *data)
+    for (const std::vector<CSVline> &seq : data)
       {
         vecindex++;
         long int tstart = 0;
         if (static_cast<long int>(seq.size()) < _timesteps)
           {
-            if (data == &this->_csvtsdata_test)
-              _tilogger->warn(
-                  "file " + _test_fnames[vecindex]
-                  + " does not contains enough timesteps, discarding");
-            else
-              _tilogger->warn(
-                  "file " + _fnames[vecindex]
-                  + " does not contains enough timesteps, discarding");
+            discard_warn(vecindex, seq.size(), test);
             continue;
           }
         for (; tstart + _timesteps < static_cast<long int>(seq.size());
@@ -916,16 +959,11 @@ namespace dd
     _ids.clear();
     // we have _csvtsdata and csvtsdata_test to put into TorchDataset
     // _dataset , _test_dataset
-    std::vector<std::vector<CSVline>> *data;
-    if (use_csvtsdata_test)
-      data = &this->_csvtsdata_test;
-    else
-      data = &this->_csvtsdata;
 
-    if (_forecast != -1)
-      fill_dataset_forecast(dataset, data);
+    if (_forecast_timesteps != -1)
+      fill_dataset_forecast(dataset, use_csvtsdata_test);
     else
-      fill_dataset_labels(dataset, data);
+      fill_dataset_labels(dataset, use_csvtsdata_test);
     dataset.reset();
   }
 }

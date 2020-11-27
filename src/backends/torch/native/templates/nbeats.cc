@@ -286,15 +286,13 @@ namespace dd
   void NBeats::update_params(const CSVTSTorchInputFileConn &inputc)
   {
     _data_size = inputc._datadim - inputc._label.size();
-    if (inputc._forecast > 0)
+    if (inputc._forecast_timesteps > 0)
       {
-        _forecast_length = inputc._forecast;
-        _backcast_length = inputc._timesteps - _forecast_length;
+        _forecast_length = inputc._forecast_timesteps;
+        _backcast_length = inputc._backcast_timesteps;
       }
     else
-      {
-        _forecast_length = _backcast_length = inputc._timesteps;
-      }
+      _forecast_length = _backcast_length = inputc._timesteps;
   }
 
   void NBeats::create_nbeats()
