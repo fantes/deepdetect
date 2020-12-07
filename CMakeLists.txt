@@ -56,8 +56,8 @@ OPTION(BUILD_TESTS "Should the tests be built")
 OPTION(BUILD_TOOLS "Should the tools be built")
 OPTION(USE_COMMAND_LINE "build command line JSON API" ON)
 OPTION(USE_JSON_API "build internal JSON API" ON)
-OPTION(USE_HTTP_SERVER "build http JSON API " ON)
-OPTION(USE_HTTP_SERVER_OATPP "use OAT instead cpp-netlib" OFF)
+OPTION(USE_HTTP_SERVER "build cppnet-lib version of http JSON API " ON)
+OPTION(USE_HTTP_SERVER_OATPP "build oatpp version of http JSON API" ON)
 
 # Get the current working branch
 execute_process(
@@ -276,7 +276,7 @@ if (USE_CAFFE)
         faisslib
         PREFIX faiss
         SOURCE_DIR ${CMAKE_BINARY_DIR}/faiss/src/faiss
-        GIT_REPOSITORY https://github.com/fantes/faiss
+        GIT_REPOSITORY https://github.com/jolibrain/faiss
         CONFIGURE_COMMAND ./configure ${CONFIGURE_OPTS}
         INSTALL_COMMAND ""
         BUILD_IN_SOURCE 1
@@ -299,6 +299,9 @@ if (USE_TENSORRT)
   set(USE_CUDNN ON)
 endif()
 
+if (USE_CUDNN)
+  find_package(CUDNN REQUIRED)
+endif()
 
 # CUDA dependencies
 if (CUDA_FOUND)
@@ -813,18 +816,18 @@ if (USE_TENSORRT)
 
   if (JETSON)
     set(TRTTESTDIR /usr/lib/aarch64-linux-gnu)
-      set(TENSORRT_LIB_DIR  /usr/lib/aarch64-linux-gnu)
-      set(TENSORRT_INC_DIR ${PROTOBUF_INCLUDE_DIR} /usr/include/aarch64-linux-gnu)
+    set(TENSORRT_LIB_DIR /usr/lib/aarch64-linux-gnu)
+    set(TENSORRT_INC_DIR /usr/include/aarch64-linux-gnu)
   elseif(DEFINED TENSORRT_DIR)
     set(TRTTESTDIR ${TENSORRT_DIR}/lib)
-      set(TENSORRT_LIB_DIR  ${TENSORRT_DIR}/lib )
-      set(TENSORRT_INC_DIR ${PROTOBUF_INCLUDE_DIR} ${TENSORRT_DIR}/include)
+    set(TENSORRT_LIB_DIR  ${TENSORRT_DIR}/lib )
+    set(TENSORRT_INC_DIR ${TENSORRT_DIR}/include)
   elseif (DEFINED TENSORRT_LIB_DIR AND DEFINED TENSORRT_INC_DIR)
     set(TRTTESTDIR TENSORRT_LIB_DIR)
   else()
     set(TRTTESTDIR /usr/lib/x86_64-linux-gnu)
-      set(TENSORRT_LIB_DIR  /usr/lib/x86_64-linux-gnu)
-      set(TENSORRT_INC_DIR ${PROTOBUF_INCLUDE_DIR} /usr/include/x86_64-linux-gnu)
+    set(TENSORRT_LIB_DIR  /usr/lib/x86_64-linux-gnu)
+    set(TENSORRT_INC_DIR /usr/include/x86_64-linux-gnu)
   endif()
 
   if (NOT EXISTS "${TRTTESTDIR}/libnvinfer.so")
@@ -849,7 +852,7 @@ if (USE_TENSORRT)
     endif()
 
 
-    list(APPEND TRT_FLAGS
+    set(TRT_FLAGS
       -DTRT_OUT_DIR=${CMAKE_BINARY_DIR}/tensorrt-oss/bin
       -DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc
       -DBUILD_SAMPLES=OFF
@@ -861,7 +864,6 @@ if (USE_TENSORRT)
 
 	set(TRT_PATCHES_PATH ${CMAKE_BINARY_DIR}/patches/trt)
 	set(TRT_PATCHES ${TRT_PATCHES_PATH}/0001-support-for-refinedet.patch)
-    set(TRT_COMPLETE ${CMAKE_BINARY_DIR}/CMakeFiles/tensorrt-oss-complete)
 
     # Tensorrt uses its own protobuf version (3.0.0) and this cannot be overrided
     # At best we can set the version it will internally build
@@ -871,13 +873,13 @@ if (USE_TENSORRT)
       GIT_REPOSITORY https://github.com/NVIDIA/TensorRT.git
 	  GIT_TAG ${TENSORRT_COMMIT}
       GIT_CONFIG advice.detachedHead=false
-      UPDATE_DISCONNECTED 1
-	  PATCH_COMMAND test -f ${TRT_COMPLETE} && echo Skipping || git apply ${TRT_PATCHES} && echo Applying ${TRT_PATCHES}
-      CONFIGURE_COMMAND test -f ${TRT_COMPLETE} && echo Skipping || cmake ../tensorrt-oss ${TRT_FLAGS}
-      BUILD_COMMAND test -f ${TRT_COMPLETE} && echo Skipping || make -j${N}
+	  PATCH_COMMAND git reset --hard && git apply ${TRT_PATCHES}
+      CMAKE_ARGS ${TRT_FLAGS}
       INSTALL_COMMAND ""
     )
 
+    # Use our tensorrt-oss header versions first
+    include_directories(SYSTEM ${CMAKE_BINARY_DIR}/tensorrt-oss/src/tensorrt-oss/include)
     include_directories(${TENSORRT_INC_DIR})
 endif()
 
@@ -1029,16 +1031,18 @@ endif()
 file(GLOB_RECURSE ALL_SOURCE_FILES src/*.cpp src/*.hpp src/*.h src/*.c tests/*.cc src/*.cc)
 list(FILTER ALL_SOURCE_FILES EXCLUDE REGEX "^${CMAKE_SOURCE_DIR}/src/ext/.*$")
 
+
+find_program(CLANG_FORMAT_BIN clang-format-10 clang-format)
 add_custom_target(
         clang-format
-        COMMAND clang-format
+        COMMAND ${CLANG_FORMAT_BIN}
         -style=file
         -i
         ${ALL_SOURCE_FILES}
 )
 add_custom_target(
         clang-format-check
-        COMMAND clang-format
+        COMMAND ${CLANG_FORMAT_BIN}
         --dry-run
         --Werror
         --ferror-limit=10

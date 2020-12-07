@@ -1,5 +1,11 @@
 pipeline {
-  agent { node { label 'gpu' } }
+  agent {
+    dockerfile {
+      label 'gpu'
+      filename 'ci/devel.Dockerfile'
+      args "-v /var/lib/jenkins/.ccache:/ccache -e CCACHE_DIR=/ccache --runtime nvidia"
+    }
+  }
   stages {
     stage('Init') {
       steps {
@@ -29,7 +35,8 @@ pipeline {
       steps {
         sh '''
 export PATH="/usr/lib/ccache/:$PATH"
-mkdir -p build
+export TMPDIR=$(pwd)/build/tmp
+mkdir -p build/tmp
 cd build
 cmake .. \
     -DBUILD_TESTS=ON  \
@@ -52,6 +59,7 @@ cmake .. \
         sh 'cd build && make clang-format-check'
       }
     }
+
     stage('Check python client') {
       steps {
         sh 'cd clients/python/ && tox -e pep8,py36,py27'
@@ -61,6 +69,7 @@ cmake .. \
       steps {
         sh '''
 export PATH="/usr/lib/ccache/:$PATH"
+export TMPDIR=$(pwd)/build/tmp
 cd build
 schedtool -B -n 1 -e ionice -n 1 make -j24 protobuf caffe_dd pytorch Multicore-TSNE faisslib ncnn xgboost cpp-netlib tensorrt-oss oatpp oatpp-swagger oatpp-zlib
 # TODO(sileht): we should create the prebuilt artefacts here after each successful master branch build
@@ -71,7 +80,7 @@ ccache -s
     }
     stage('Tests GPU') {
       when {
-       expression { !env.CHANGE_ID || pullRequest.labels.findAll { it == "ci:skip" }.size() == 0 }
+       expression { !env.CHANGE_ID || pullRequest.labels.findAll { it == "ci:skip-tests" }.size() == 0 }
       }
       steps {
         lock(resource: null, label: "${NODE_NAME}-gpu", variable: 'LOCKED_GPU', quantity: 1) {
@@ -82,7 +91,7 @@ ccache -s
           python3 -c 'import torch, sys; c=torch.cuda.device_count() ; print(f"CUDA VISIBLE GPU: {c}"); sys.exit(bool(c == 0 ))'
           echo
           echo "****************************"
-          cd build && ctest -V -E "http|multigpu"
+          cd build && ctest -V -E "multigpu"
           '''
           }
       }
@@ -90,7 +99,7 @@ ccache -s
 /*
     stage('Tests multi-GPU') {
       when {
-       expression { !env.CHANGE_ID || pullRequest.labels.findAll { it == "ci:skip" }.size() == 0 }
+       expression { !env.CHANGE_ID || pullRequest.labels.findAll { it == "ci:skip-tests" }.size() == 0 }
       }
       steps {
         lock(resource: null, label: 'gpu', variable: 'LOCKED_GPU', quantity: 2) {
@@ -101,7 +110,7 @@ ccache -s
           python3 -c 'import torch, sys; c=torch.cuda.device_count() ; print(f"CUDA VISIBLE GPU: {c}"); sys.exit(bool(c < 2))'
           echo
           echo "****************************"
-          cd build && ctest -V -E "http" -R "multigpu"
+          cd build && ctest -V -R "multigpu"
           '''
           }
       }
