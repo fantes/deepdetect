@@ -1,6 +1,7 @@
 project(deepdetect)
 cmake_minimum_required(VERSION 3.10)
 
+
 option(RELEASE "release mode" OFF)
 option(WARNING "enable warning" ON)
 option(USE_CAFFE "build caffe backend" ON)
