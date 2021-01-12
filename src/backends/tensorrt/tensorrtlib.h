@@ -108,10 +108,12 @@ namespace dd
 
   public:
     int _nclasses = 0;
+    int _width = 0;  /**< default model width. */
+    int _height = 0; /**< default model height. */
     int _dla = -1;
     nvinfer1::DataType _datatype = nvinfer1::DataType::kFLOAT;
     int _max_batch_size = 48;
-    int _max_workspace_size = 1 << 30; // 1GB
+    size_t _max_workspace_size = 1 << 30; // 1GB
     int _top_k
         = 200; // top_k parameters in ssd in dede templates, can be overriden
     std::string _engineFileName = "TRTengine";
