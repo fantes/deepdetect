@@ -269,6 +269,14 @@ if (USE_NCNN)
     "examples/ncnn"
     "squeezenet-ssd-ncnn-caffe.tar.gz"
     "squeezenet_ssd_ncnn"
+    )
+
+    DOWNLOAD_DATASET(
+    "NCNN test Squeezenet classification model"
+    "https://www.deepdetect.com/dd/examples/ncnn/squeezenet-ncnn-caffe.tar.gz"
+    "examples/ncnn"
+    "squeezenet-ncnn-caffe.tar.gz"
+    "squeezenet_ncnn"
   )
 
   if(USE_JSON_API)
@@ -325,6 +333,13 @@ if (USE_TORCH)
     "examples/torch"
     "resnet50_training_torch_small.tar.gz"
     "resnet50_training_torch"
+    )
+  DOWNLOAD_DATASET(
+    "Torch native Resnet 50 model"
+    "https://www.deepdetect.com/dd/examples/torch/resnet50_native_torch.tar.gz"
+    "examples/torch"
+    "resnet50_native_torch.tar.gz"
+    "resnet50_native_torch"
     )
   DOWNLOAD_DATASET(
     "Torch BERT classification test model"

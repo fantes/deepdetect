@@ -186,7 +186,11 @@ namespace dd
     if (lib_ad.has("loss"))
       _loss = lib_ad.get("loss").get<std::string>();
     if (lib_ad.has("template_params"))
-      _template_params = lib_ad;
+      {
+        _template_params = lib_ad.getobj("template_params");
+        if (lib_ad.has("nclasses"))
+          _template_params.add("nclasses", lib_ad.get("nclasses").get<int>());
+      }
 
     // Find GPU id
     if (!gpu)
@@ -481,7 +485,35 @@ namespace dd
         throw;
       }
 
+    // TODO: set inputc dataset data augmentation options
     APIData ad_mllib = ad.getobj("parameters").getobj("mllib");
+    bool has_data_augmentation
+        = ad_mllib.has("mirror") || ad_mllib.has("rotate")
+          || ad_mllib.has("crop_size") || ad_mllib.has("cutout");
+    if (has_data_augmentation)
+      {
+        bool has_mirror
+            = ad_mllib.has("mirror") && ad_mllib.get("mirror").get<bool>();
+        this->_logger->info("mirror: {}", has_mirror);
+        bool has_rotate
+            = ad_mllib.has("rotate") && ad_mllib.get("rotate").get<bool>();
+        this->_logger->info("rotate: {}", has_rotate);
+        int crop_size = -1;
+        if (ad_mllib.has("crop_size"))
+          {
+            crop_size = ad_mllib.get("crop_size").get<int>();
+            this->_logger->info("crop_size : {}", crop_size);
+          }
+        float cutout = 0.0;
+        if (ad_mllib.has("cutout"))
+          {
+            cutout = ad_mllib.get("cutout").get<double>();
+            this->_logger->info("cutout: {}", cutout);
+          }
+        inputc._dataset._img_rand_aug_cv
+            = TorchImgRandAugCV(inputc.width(), inputc.height(), has_mirror,
+                                has_rotate, crop_size, cutout);
+      }
 
     // solver params
     int64_t iterations = 1;
@@ -546,6 +578,10 @@ namespace dd
           }
       }
 
+    bool retain_graph = ad_mllib.has("retain_graph")
+                            ? ad_mllib.get("retain_graph").get<bool>()
+                            : false;
+
     if (iter_size <= 0)
       iter_size = 1;
 
@@ -602,7 +638,6 @@ namespace dd
 
         for (TorchBatch batch : *dataloader)
           {
-
             auto tstart = steady_clock::now();
             if (_masked_lm)
               {
@@ -688,7 +723,9 @@ namespace dd
 
             double loss_val = loss.item<double>();
             train_loss += loss_val;
-            loss.backward();
+            loss.backward({},
+                          /*retain_graph=*/c10::optional<bool>(retain_graph),
+                          /*create_graph=*/false);
             auto tstop = steady_clock::now();
             last_it_time
                 += duration_cast<milliseconds>(tstop - tstart).count();

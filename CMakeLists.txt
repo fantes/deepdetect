@@ -11,7 +11,6 @@ option(USE_TF "use TF backend" OFF)
 option(USE_NCNN "use NCNN backend" OFF)
 option(USE_TORCH "use libtorch backend" OFF)
 option(USE_HDF5 "use HDF5" ON)
-option(USE_CAFFE "use Caffe backend" ON)
 option(USE_TENSORRT "use TensorRT backend" OFF)
 option(USE_TENSORRT_OSS "alias of USE_TENSORRT" OFF)
 option(USE_XGBOOST "use XGBOOST backend" OFF)
@@ -23,6 +22,7 @@ option(USE_SIMSEARCH "build index and search services" OFF)
 option(USE_ANNOY "use annoy as indexer" OFF)
 option(USE_FAISS "use FAISS as indexer" ON)
 option(BUILD_SPDLOG "build SPDLOG instead of using system library" OFF)
+option(USE_BOOST_BACKTRACE "use boost backtrace" ON)
 
 if (USE_CAFFE)
   add_definitions(-DUSE_CAFFE)
@@ -185,13 +185,14 @@ if (BUILD_SPDLOG)
     ExternalProject_Add(
         spdlog
         PREFIX spdlog
-        URL https://github.com/gabime/spdlog/archive/v1.8.1.tar.gz
-        URL_HASH SHA256=5197b3147cfcfaa67dd564db7b878e4a4b3d9f3443801722b3915cdeced656cb
+        URL https://github.com/gabime/spdlog/archive/v1.8.2.tar.gz
+        URL_HASH SHA256=e20e6bd8f57e866eaf25a5417f0a38a116e537f1a77ac7b5409ca2b180cec0d5
         BUILD_IN_SOURCE true
-        PATCH_COMMAND patch -p1 < ${CMAKE_SOURCE_DIR}/patches/spdlog/1818.patch
         INSTALL_COMMAND ""
     )
     set(SPDLOG_LIB_DEPS ${CMAKE_BINARY_DIR}/spdlog/src/spdlog/libspdlog.a)
+    set(SPDLOG_CAFFE_LIB_DIR ${CMAKE_BINARY_DIR}/spdlog/src/spdlog)
+    set(SPDLOG_CAFFE_LIB_DEPS :libspdlog.a)
     set(SPDLOG_INCLUDE_DIR ${CMAKE_BINARY_DIR}/spdlog/src/spdlog/include)
     include_directories(SYSTEM ${SPDLOG_INCLUDE_DIR})
 endif()
@@ -208,8 +209,13 @@ if (USE_HDF5)
 endif()
 
 # dependency on Boost
-find_package(Boost 1.54 REQUIRED COMPONENTS filesystem thread system iostreams stacktrace_backtrace)
-string(APPEND CMAKE_CXX_FLAGS " -DBOOST_STACKTRACE_USE_BACKTRACE -DBOOST_STACKTRACE_LINK")
+if (USE_BOOST_BACKTRACE)
+    add_definitions(-DUSE_BOOST_BACKTRACE)
+    find_package(Boost 1.54 REQUIRED COMPONENTS filesystem thread system iostreams stacktrace_backtrace)
+    string(APPEND CMAKE_CXX_FLAGS " -DBOOST_STACKTRACE_USE_BACKTRACE -DBOOST_STACKTRACE_LINK")
+else()
+    find_package(Boost 1.54 REQUIRED COMPONENTS filesystem thread system iostreams)
+endif()
 
 
 # CUDA OR CPU options
@@ -575,14 +581,6 @@ elseif(USE_CAFFE)
   endif()
 
 
-  # Set cuda arch
-  if (NOT USE_CAFFE_CPU_ONLY)
-    if (NOT CUDA_ARCH)
-      string(REPLACE ";" " " CUDA_ARCH "${CUDA_NVCC_FLAGS}")
-    endif()
-    list(APPEND CAFFE_DD_MAKE_ARG CUDA_ARCH=${CUDA_ARCH})
-  endif()
-
   # Set config file
   if (USE_CAFFE_CPU_ONLY)
     add_definitions(-DUSE_CAFFE_CPU_ONLY)
@@ -627,8 +625,10 @@ elseif(USE_CAFFE)
         echo "USE_SYSLOG:=${USE_SYSLOG}" >> Makefile.config &&
         echo "DEBUG:=${CAFFE_DEBUG}" >> Makefile.config &&
         echo "INCLUDE_DIRS+=${SPDLOG_INCLUDE_DIR}" >> Makefile.config &&
-        echo "LIBRARIES+=${SPDLOG_LIB_DEPS}" >> Makefile.config &&
         echo "INCLUDE_DIRS+=${PROTOBUF_INCLUDE_DIR}" >> Makefile.config &&
+        echo "CUDA_ARCH:=${CUDA_ARCH}" >> Makefile.config &&
+        echo "LIBRARIES+=${SPDLOG_CAFFE_LIB_DEPS}" >> Makefile.config &&
+        echo "LIBRARY_DIRS+=${SPDLOG_CAFFE_LIB_DIR}" >> Makefile.config &&
         echo "LIBRARY_DIRS+=${PROTOBUF_LIB_DIR}" >> Makefile.config
     BUILD_COMMAND 
         ${CMAKE_COMMAND} -E env LD_LIBRARY_PATH=${PROTOBUF_LIB_DIR}:$ENV{LD_LIBRARY_PATH} PATH=${PROTOBUF_LIB_DIR}:$ENV{PATH} make -j${N} proto &&
@@ -680,13 +680,26 @@ if (USE_NCNN)
   message(STATUS "Configuring NCNN")
   add_definitions(-DUSE_NCNN)
   include_directories(${CMAKE_CURRENT_BINARY_DIR})
+  set(NCNN_PATCHES_PATH ${CMAKE_BINARY_DIR}/patches/ncnn)
+  set(NCNN_PATCHES
+    ${NCNN_PATCHES_PATH}/ncnn_inner_keep_h.patch
+    ${NCNN_PATCHES_PATH}/ncnn_lstm_cont.patch
+    ${NCNN_PATCHES_PATH}/ncnn_variable_h.patch
+    ${NCNN_PATCHES_PATH}/ncnn_flatten_axis.patch
+    )
+
+  set(NCNN_VERSION "20201218")
+  set(NCNN_COMPLETE ${CMAKE_BINARY_DIR}/CMakeFiles/ncnn-complete)
+
   set(NCNN_LIB_DEPS ${CMAKE_BINARY_DIR}/ncnn/src/ncnn-build/src/libncnn.a)
   if (RPI3)
     ExternalProject_Add(
       ncnn
       PREFIX ncnn
-      GIT_REPOSITORY https://github.com/jolibrain/ncnn.git
-      CMAKE_ARGS -DPI3=ON -DCMAKE_TOOLCHAIN_FILE=../toolchains/pi3.toolchain.cmake -DCMAKE_BUILD_TYPE=Release -DProtobuf_INCLUDE_DIR=${CMAKE_BINARY_DIR}/protobuf/src/protobuf/src -DProtobuf_LIBRARIES=${PROTOBUF_LIB_DIR}/libprotobuf.so -DProtobuf_PROTOC_EXECUTABLE=${PROTOBUF_LIB_DIR}/protoc
+      GIT_REPOSITORY https://github.com/tencent/ncnn.git
+      GIT_TAG ${NCNN_VERSION}
+      PATCH_COMMAND git apply ${NCNN_PATCHES} && echo Applying ${NCNN_PATCHES}
+      CMAKE_ARGS -DPI3=ON -DCMAKE_TOOLCHAIN_FILE=../toolchains/pi3.toolchain.cmake -DCMAKE_BUILD_TYPE=Release -DProtobuf_INCLUDE_DIR=${CMAKE_BINARY_DIR}/protobuf/src/protobuf/src -DProtobuf_LIBRARIES=${PROTOBUF_LIB_DIR}/libprotobuf.so -DProtobuf_PROTOC_EXECUTABLE=${PROTOBUF_LIB_DIR}/protoc -DNCNN_BUILD_EXAMPLES=OFF -DNCNN_BUILD_BENCHMARK=OFF -DNCNN_BUILD_TOOLS=OFF -DNCNN_BUILD_TESTS=OFF
       INSTALL_COMMAND ""
       DEPENDS protobuf
     )
@@ -694,8 +707,10 @@ if (USE_NCNN)
     ExternalProject_Add(
       ncnn
       PREFIX ncnn
-      GIT_REPOSITORY https://github.com/jolibrain/ncnn.git
-      CMAKE_ARGS -DCMAKE_BUILD_TYPE=Release -DProtobuf_INCLUDE_DIR=${CMAKE_BINARY_DIR}/protobuf/src/protobuf/src -DProtobuf_LIBRARIES=${PROTOBUF_LIB_DIR}/libprotobuf.so -DProtobuf_PROTOC_EXECUTABLE=${PROTOBUF_LIB_DIR}/protoc
+      PATCH_COMMAND test -f ${NCNN_COMPLETE} || git apply ${NCNN_PATCHES}
+      GIT_TAG ${NCNN_VERSION}
+      GIT_REPOSITORY https://github.com/tencent/ncnn.git
+      CMAKE_ARGS -DCMAKE_BUILD_TYPE=Release -DProtobuf_INCLUDE_DIR=${CMAKE_BINARY_DIR}/protobuf/src/protobuf/src -DProtobuf_LIBRARIES=${PROTOBUF_LIB_DIR}/libprotobuf.so -DProtobuf_PROTOC_EXECUTABLE=${PROTOBUF_LIB_DIR}/protoc -DNCNN_BUILD_EXAMPLES=OFF -DNCNN_BUILD_BENCHMARK=OFF -DNCNN_BUILD_TOOLS=OFF -DNCNN_BUILD_TESTS=OFF
       INSTALL_COMMAND ""
       DEPENDS protobuf
       )
@@ -767,7 +782,8 @@ if (USE_TORCH)
   # TORCH VISION
   message(STATUS "Configuring Pytorch Vision")
   # set(PYTORCH_VISION_COMMIT "v0.6.0") # 0.6 & torch 1.5
-  set(PYTORCH_VISION_COMMIT "v0.7.0") # 0.7 & torch 1.6
+  #set(PYTORCH_VISION_COMMIT "v0.7.0") # 0.7 & torch 1.6
+  set(PYTORCH_VISION_COMMIT "v0.8.2") # 0.8.2 & torch 1.7.1
   set(TORCHVISION_LOCATION "${CMAKE_BINARY_DIR}/pytorch_vision/src/pytorch_vision-install")
   ExternalProject_Add(
     pytorch_vision
@@ -941,11 +957,14 @@ if (USE_TENSORRT)
 endif()
 
 if (USE_HTTP_SERVER_OATPP)
+    set(OATPP_VERSION "6b4413552acf4ebcd0d3df411d6a2a6fc78cabc1") # pre-1.2.5
+    set(OATPP_SWAGGER_VERSION "8b70945f0e9bcf09e16b5cb4be08e752097b0288") # pre-1.2.5
+    set(OATPP_ZLIB_VERSION "1846f759b7483e2386236a75728c1cbbb935b2a6") # pre-1.2.5
     ExternalProject_Add(
         oatpp
         PREFIX oatpp
-        URL https://github.com/oatpp/oatpp/archive/1.2.0.tar.gz
-        URL_HASH SHA256=7f55669827ece429b6d85f4403b76da717d3fdf0e92721e9a0229cf8168e8e37
+        URL https://github.com/oatpp/oatpp/archive/${OATPP_VERSION}.tar.gz
+        URL_HASH SHA256=4517457270d0fb0096ea2796297f6901c619650843d242c2748284d89450217b
         BUILD_IN_SOURCE true
         CMAKE_ARGS -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF -DOATPP_INSTALL=OFF -DOATPP_BUILD_TESTS=OFF
         INSTALL_COMMAND ""
@@ -953,8 +972,8 @@ if (USE_HTTP_SERVER_OATPP)
     ExternalProject_Add(
         oatpp-zlib
         PREFIX oatpp-zlib
-        URL https://github.com/oatpp/oatpp-zlib/archive/1.2.0.tar.gz
-        URL_HASH SHA256=cf9a5815ce0e845e4353ecd537e34a414bcd6ca4f09d0f763224dc56163d6477
+        URL https://github.com/oatpp/oatpp-zlib/archive/${OATPP_ZLIB_VERSION}.tar.gz
+        URL_HASH SHA256=405961fda17ae8fd1be1381e505b0a078b92d11c6f743a01e1827ab95c1ee810
         CMAKE_ARGS
             -DCMAKE_BUILD_TYPE=Release
             -DBUILD_SHARED_LIBS=OFF
@@ -970,8 +989,8 @@ if (USE_HTTP_SERVER_OATPP)
     ExternalProject_Add(
         oatpp-swagger
         PREFIX oatpp-swagger
-        URL https://github.com/oatpp/oatpp-swagger/archive/1.2.0.tar.gz
-        URL_HASH SHA256=8457c9d6f13165428df66f8ff648d3970d0108d572cf8c42bb87122a05e507e6
+        URL https://github.com/oatpp/oatpp-swagger/archive/${OATPP_SWAGGER_VERSION}.tar.gz
+        URL_HASH SHA256=561a98c54550a703c3c2bde9658ab426d4da92345a4841ba68f5477feece42dc
         BUILD_IN_SOURCE true
         INSTALL_COMMAND ""
         CMAKE_ARGS
@@ -1153,3 +1172,4 @@ message(STATUS "USE_CUDNN:             ${USE_CUDNN}")
 message(STATUS "USE_XGBOOST:           ${USE_XGBOOST}")
 message(STATUS "USE_XGBOOST_CPU_ONLY:  ${USE_XGBOOST_CPU_ONLY}")
 message(STATUS "USE_TSNE:              ${USE_TSNE}")
+message(STATUS "USE_BOOST_BACKTRACE:   ${USE_BOOST_BACKTRACE}")

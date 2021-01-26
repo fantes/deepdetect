@@ -37,14 +37,12 @@ namespace dd
             class TMLModel>
   ncnn::UnlockedPoolAllocator
       NCNNLib<TInputConnectorStrategy, TOutputConnectorStrategy,
-              TMLModel>::_blob_pool_allocator
-      = ncnn::UnlockedPoolAllocator();
+              TMLModel>::_blob_pool_allocator;
   template <class TInputConnectorStrategy, class TOutputConnectorStrategy,
             class TMLModel>
   ncnn::PoolAllocator
       NCNNLib<TInputConnectorStrategy, TOutputConnectorStrategy,
-              TMLModel>::_workspace_pool_allocator
-      = ncnn::PoolAllocator();
+              TMLModel>::_workspace_pool_allocator;
 
   template <class TInputConnectorStrategy, class TOutputConnectorStrategy,
             class TMLModel>
@@ -55,7 +53,6 @@ namespace dd
   {
     this->_libname = "ncnn";
     _net = new ncnn::Net();
-    _net->opt.lightmode = true;
     _net->opt.num_threads = _threads;
     _net->opt.blob_allocator = &_blob_pool_allocator;
     _net->opt.workspace_allocator = &_workspace_pool_allocator;
@@ -85,7 +82,10 @@ namespace dd
   NCNNLib<TInputConnectorStrategy, TOutputConnectorStrategy,
           TMLModel>::~NCNNLib()
   {
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdelete-non-virtual-dtor"
     delete _net;
+#pragma GCC diagnostic pop
     _net = nullptr;
   }
 
@@ -94,6 +94,13 @@ namespace dd
   void NCNNLib<TInputConnectorStrategy, TOutputConnectorStrategy,
                TMLModel>::init_mllib(const APIData &ad)
   {
+    bool use_fp32 = (ad.has("datatype")
+                     && ad.get("datatype").get<std::string>()
+                            == "fp32"); // default is fp16
+    _net->opt.use_fp16_packed = !use_fp32;
+    _net->opt.use_fp16_storage = !use_fp32;
+    _net->opt.use_fp16_arithmetic = !use_fp32;
+
     int res = _net->load_param(this->_mlmodel._params.c_str());
     if (res != 0)
       {
@@ -204,11 +211,6 @@ namespace dd
         _net->set_input_h(_old_height);
       }
 
-    ncnn::Extractor ex = _net->create_extractor();
-
-    ex.set_num_threads(_threads);
-    ex.input(_inputBlob.c_str(), inputc._in);
-
     APIData ad_output = ad.getobj("parameters").getobj("output");
 
     // Get bbox
@@ -243,18 +245,8 @@ namespace dd
         else
           out_blob = "prob";
       }
-    ret = ex.extract(out_blob.c_str(), inputc._out);
-    if (ret == -1)
-      {
-        throw MLLibInternalException("NCNN internal error");
-      }
 
     std::vector<APIData> vrad;
-    std::vector<double> probs;
-    std::vector<std::string> cats;
-    std::vector<APIData> bboxes;
-    std::vector<APIData> series;
-    APIData rad;
 
     // Get confidence_threshold
     float confidence_threshold = 0.0;
@@ -265,128 +257,171 @@ namespace dd
       }
 
     // Get best
-    int best = 1;
+    int best = -1;
     if (ad_output.has("best"))
       {
         best = ad_output.get("best").get<int>();
       }
+    if (best == -1 || best > _nclasses)
+      best = _nclasses;
 
-    if (bbox == true)
+      // for loop around batch size
+#pragma omp parallel for num_threads(_threads)
+    for (size_t b = 0; b < inputc._ids.size(); b++)
       {
-        for (int i = 0; i < inputc._out.h; i++)
-          {
-            const float *values = inputc._out.row(i);
-            if (values[1] < confidence_threshold)
-              continue;
+        std::vector<double> probs;
+        std::vector<std::string> cats;
+        std::vector<APIData> bboxes;
+        std::vector<APIData> series;
+        APIData rad;
 
-            cats.push_back(this->_mlmodel.get_hcorresp(values[0]));
-            probs.push_back(values[1]);
+        ncnn::Extractor ex = _net->create_extractor();
+        ex.set_num_threads(_threads);
+        ex.input(_inputBlob.c_str(), inputc._in.at(b));
 
-            APIData ad_bbox;
-            ad_bbox.add("xmin",
-                        static_cast<double>(values[2] * inputc.width()));
-            ad_bbox.add("ymin",
-                        static_cast<double>(values[3] * inputc.height()));
-            ad_bbox.add("xmax",
-                        static_cast<double>(values[4] * inputc.width()));
-            ad_bbox.add("ymax",
-                        static_cast<double>(values[5] * inputc.height()));
-            bboxes.push_back(ad_bbox);
-          }
-      }
-    else if (ctc == true)
-      {
-        int alphabet = inputc._out.w;
-        int time_step = inputc._out.h;
-        std::vector<int> pred_label_seq_with_blank(time_step);
-        for (int t = 0; t < time_step; ++t)
+        ret = ex.extract(out_blob.c_str(), inputc._out.at(b));
+        if (ret == -1)
           {
-            const float *values = inputc._out.row(t);
-            pred_label_seq_with_blank[t] = std::distance(
-                values, std::max_element(values, values + alphabet));
+            throw MLLibInternalException("NCNN internal error");
           }
 
-        std::vector<int> pred_label_seq;
-        int prev = blank_label;
-        for (int t = 0; t < time_step; ++t)
+        if (bbox == true)
           {
-            int cur = pred_label_seq_with_blank[t];
-            if (cur != prev && cur != blank_label)
-              pred_label_seq.push_back(cur);
-            prev = cur;
-          }
-        std::string outstr;
-        std::ostringstream oss;
-        for (auto l : pred_label_seq)
-          outstr += char(std::atoi(this->_mlmodel.get_hcorresp(l).c_str()));
-        cats.push_back(outstr);
-        probs.push_back(1.0);
-      }
-    else if (_timeserie)
-      {
-        std::vector<int> tsl = inputc._timeseries_lengths;
-        for (unsigned int tsi = 0; tsi < tsl.size(); ++tsi)
-          {
-            for (int ti = 0; ti < tsl[tsi]; ++ti)
+            std::string uri = inputc._ids.at(b);
+            auto bit = inputc._imgs_size.find(uri);
+            int rows = 1;
+            int cols = 1;
+            if (bit != inputc._imgs_size.end())
               {
-                std::vector<double> predictions;
-                for (int k = 0; k < inputc._ntargets; ++k)
-                  {
-                    double res = inputc._out.row(ti)[k];
-                    predictions.push_back(inputc.unscale_res(res, k));
-                  }
-                APIData ts;
-                ts.add("out", predictions);
-                series.push_back(ts);
+                // original image size
+                rows = (*bit).second.first;
+                cols = (*bit).second.second;
+              }
+            else
+              {
+                throw MLLibInternalException(
+                    "Couldn't find original image size for " + uri);
+              }
+            for (int i = 0; i < inputc._out.at(b).h; i++)
+              {
+                const float *values = inputc._out.at(b).row(i);
+                if (values[1] < confidence_threshold)
+                  break; // output is sorted by confidence
+
+                cats.push_back(this->_mlmodel.get_hcorresp(values[0]));
+                probs.push_back(values[1]);
+
+                APIData ad_bbox;
+                ad_bbox.add("xmin",
+                            static_cast<double>(values[2] * (cols - 1)));
+                ad_bbox.add("ymin",
+                            static_cast<double>(values[3] * (rows - 1)));
+                ad_bbox.add("xmax",
+                            static_cast<double>(values[4] * (cols - 1)));
+                ad_bbox.add("ymax",
+                            static_cast<double>(values[5] * (rows - 1)));
+                bboxes.push_back(ad_bbox);
               }
           }
-      }
-    else
-      {
-        std::vector<float> cls_scores;
-
-        cls_scores.resize(inputc._out.w);
-        for (int j = 0; j < inputc._out.w; j++)
+        else if (ctc == true)
           {
-            cls_scores[j] = inputc._out[j];
+            int alphabet = inputc._out.at(b).w;
+            int time_step = inputc._out.at(b).h;
+            std::vector<int> pred_label_seq_with_blank(time_step);
+            for (int t = 0; t < time_step; ++t)
+              {
+                const float *values = inputc._out.at(b).row(t);
+                pred_label_seq_with_blank[t] = std::distance(
+                    values, std::max_element(values, values + alphabet));
+              }
+
+            std::vector<int> pred_label_seq;
+            int prev = blank_label;
+            for (int t = 0; t < time_step; ++t)
+              {
+                int cur = pred_label_seq_with_blank[t];
+                if (cur != prev && cur != blank_label)
+                  pred_label_seq.push_back(cur);
+                prev = cur;
+              }
+            std::string outstr;
+            std::ostringstream oss;
+            for (auto l : pred_label_seq)
+              outstr
+                  += char(std::atoi(this->_mlmodel.get_hcorresp(l).c_str()));
+            cats.push_back(outstr);
+            probs.push_back(1.0);
           }
-        int size = cls_scores.size();
-        std::vector<std::pair<float, int>> vec;
-        vec.resize(size);
-        for (int i = 0; i < size; i++)
+        else if (_timeserie)
           {
-            vec[i] = std::make_pair(cls_scores[i], i);
+            std::vector<int> tsl = inputc._timeseries_lengths;
+            for (unsigned int tsi = 0; tsi < tsl.size(); ++tsi)
+              {
+                for (int ti = 0; ti < tsl[tsi]; ++ti)
+                  {
+                    std::vector<double> predictions;
+                    for (int k = 0; k < inputc._ntargets; ++k)
+                      {
+                        double res = inputc._out.at(b).row(ti)[k];
+                        predictions.push_back(inputc.unscale_res(res, k));
+                      }
+                    APIData ts;
+                    ts.add("out", predictions);
+                    series.push_back(ts);
+                  }
+              }
           }
-
-        std::partial_sort(vec.begin(), vec.begin() + best, vec.end(),
-                          std::greater<std::pair<float, int>>());
-
-        for (int i = 0; i < best; i++)
+        else
           {
-            if (vec[i].first < confidence_threshold)
-              continue;
-            cats.push_back(this->_mlmodel.get_hcorresp(vec[i].second));
-            probs.push_back(vec[i].first);
+            std::vector<float> cls_scores;
+
+            cls_scores.resize(inputc._out.at(b).w);
+            for (int j = 0; j < inputc._out.at(b).w; j++)
+              {
+                cls_scores[j] = inputc._out.at(b)[j];
+              }
+            int size = cls_scores.size();
+            std::vector<std::pair<float, int>> vec;
+            vec.resize(size);
+            for (int i = 0; i < size; i++)
+              {
+                vec[i] = std::make_pair(cls_scores[i], i);
+              }
+
+            std::partial_sort(vec.begin(), vec.begin() + best, vec.end(),
+                              std::greater<std::pair<float, int>>());
+
+            for (int i = 0; i < best; i++)
+              {
+                if (vec[i].first < confidence_threshold)
+                  continue;
+                cats.push_back(this->_mlmodel.get_hcorresp(vec[i].second));
+                probs.push_back(vec[i].first);
+              }
           }
-      }
 
-    rad.add("uri", inputc._ids.at(0));
-    rad.add("loss", 0.0);
-    rad.add("cats", cats);
-    if (bbox == true)
-      rad.add("bboxes", bboxes);
-    if (_timeserie)
-      {
-        rad.add("series", series);
-        rad.add("probs", std::vector<double>(series.size(), 1.0));
-      }
-    else
-      rad.add("probs", probs);
+        rad.add("uri", inputc._ids.at(b));
+        rad.add("loss", 0.0);
+        rad.add("cats", cats);
+        if (bbox == true)
+          rad.add("bboxes", bboxes);
+        if (_timeserie)
+          {
+            rad.add("series", series);
+            rad.add("probs", std::vector<double>(series.size(), 1.0));
+          }
+        else
+          rad.add("probs", probs);
 
-    if (_timeserie)
-      out.add("timeseries", true);
+        if (_timeserie)
+          out.add("timeseries", true);
 
-    vrad.push_back(rad);
+#pragma omp critical
+        {
+          vrad.push_back(rad);
+        }
+      } // end for batch_size
+
     tout.add_results(vrad);
     out.add("nclasses", this->_nclasses);
     if (bbox == true)
@@ -395,6 +430,29 @@ namespace dd
     out.add("multibox_rois", false);
     tout.finalize(ad.getobj("parameters").getobj("output"), out,
                   static_cast<MLModel *>(&this->_mlmodel));
+
+    // chain compliance
+    if (ad.has("chain") && ad.get("chain").get<bool>())
+      {
+        if (typeid(inputc) == typeid(ImgNCNNInputFileConn))
+          {
+            APIData chain_input;
+            if (!reinterpret_cast<ImgNCNNInputFileConn *>(&inputc)
+                     ->_orig_images.empty())
+              chain_input.add("imgs",
+                              reinterpret_cast<ImgNCNNInputFileConn *>(&inputc)
+                                  ->_orig_images);
+            else
+              chain_input.add(
+                  "imgs",
+                  reinterpret_cast<ImgNCNNInputFileConn *>(&inputc)->_images);
+            chain_input.add("imgs_size",
+                            reinterpret_cast<ImgNCNNInputFileConn *>(&inputc)
+                                ->_images_size);
+            out.add("input", chain_input);
+          }
+      }
+
     out.add("status", 0);
     return 0;
   }
