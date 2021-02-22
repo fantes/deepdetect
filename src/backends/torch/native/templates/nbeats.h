@@ -78,6 +78,25 @@ namespace dd
       {
       }
 
+      BlockImpl &operator=(const BlockImpl &b)
+      {
+        torch::nn::Module::operator=(b);
+        _units = b._units;
+        _thetas_dim = b._thetas_dim;
+        _data_size = b._data_size;
+        _backcast_length = b._backcast_length;
+        _forecast_length = b._forecast_length;
+        _share_thetas = b._share_thetas;
+
+        _fc1 = b._fc1;
+        _fc2 = b._fc2;
+        _fc3 = b._fc3;
+        _fc4 = b._fc4;
+        _theta_b_fc = b._theta_b_fc;
+        _theta_f_fc = b._theta_f_fc;
+        return *this;
+      }
+
       void reset()
       {
         init_block();
@@ -123,13 +142,20 @@ namespace dd
       {
       }
 
+      SeasonalityBlockImpl &operator=(const SeasonalityBlockImpl &b)
+      {
+        BlockImpl::operator=(b);
+        _bS = b._bS;
+        _fS = b._fS;
+        return *this;
+      }
+
       SeasonalityBlockImpl &operator=(SeasonalityBlockImpl &&b)
       {
         // This operator is used when NBeats is cloned (e.g. for multigpu).
         // bT and fT are not copied because they are set by NBeats::reset()
         // With the default operator, unwanted copy of bT and fT resulting
         // in them having the wrong device id.
-        torch::nn::Module::operator=(b);
         BlockImpl::operator=(b);
         return *this;
       }
@@ -165,13 +191,20 @@ namespace dd
       {
       }
 
+      TrendBlockImpl &operator=(const TrendBlockImpl &b)
+      {
+        BlockImpl::operator=(b);
+        _bT = b._bT;
+        _fT = b._fT;
+        return *this;
+      }
+
       TrendBlockImpl &operator=(TrendBlockImpl &&b)
       {
         // This operator is used when NBeats is cloned (e.g. for multigpu).
         // bT and fT are not copied because they are set by NBeats::reset()
         // With the default operator, unwanted copy of bT and fT resulting
         // in them having the wrong device id.
-        torch::nn::Module::operator=(b);
         BlockImpl::operator=(b);
         return *this;
       }
@@ -203,10 +236,17 @@ namespace dd
       }
 
       GenericBlockImpl(const GenericBlockImpl &b)
-          : torch::nn::Module(b), BlockImpl(b)
+          : torch::nn::Module(b), BlockImpl(b), _backcast_fc(b._backcast_fc),
+            _forecast_fc(b._forecast_fc)
       {
-        _backcast_fc = b._backcast_fc;
+      }
+
+      GenericBlockImpl &operator=(const GenericBlockImpl &b)
+      {
+        BlockImpl::operator=(b);
         _forecast_fc = b._forecast_fc;
+        _backcast_fc = b._backcast_fc;
+        return *this;
       }
 
       void reset() override
@@ -257,7 +297,7 @@ namespace dd
     }
 
     NBeats(const CSVTSTorchInputFileConn &inputc,
-           std::vector<std::string> stackdef,
+           std::vector<std::string> stackdef, double backcast_loss_coef = 1,
            std::vector<BlockType> stackTypes = NBEATS_DEFAULT_STACK_TYPES,
            int nb_blocks_per_stack = NBEATS_DEFAULT_NB_BLOCKS,
            int data_size = NBEATS_DEFAULT_DATA_SIZE,
@@ -271,7 +311,8 @@ namespace dd
           _hidden_layer_units(hidden_layer_units),
           _nb_blocks_per_stack(nb_blocks_per_stack),
           _share_weights_in_stack(share_weights_in_stack),
-          _stack_types(stackTypes), _thetas_dims(thetas_dims)
+          _stack_types(stackTypes), _thetas_dims(thetas_dims),
+          _backcast_loss_coef(backcast_loss_coef)
     {
       parse_stackdef(stackdef);
       update_params(inputc);
@@ -373,12 +414,14 @@ namespace dd
       torch::Tensor y_pred = torch::slice(output, 1, _backcast_length,
                                           _backcast_length + _forecast_length);
       torch::Tensor input_zeros = torch::zeros_like(input_real);
+
       if (loss.empty() || loss == "L1" || loss == "l1")
         return torch::l1_loss(y_pred, target)
-               + torch::l1_loss(x_pred, input_zeros);
+               + torch::l1_loss(x_pred, input_zeros) * _backcast_loss_coef;
       if (loss == "L2" || loss == "l2" || loss == "eucl")
         return torch::mse_loss(y_pred, target)
-               + torch::mse_loss(x_pred, input_zeros);
+               + torch::mse_loss(x_pred, input_zeros) * _backcast_loss_coef;
+
       throw MLLibBadParamException("unknown loss " + loss);
     }
 
@@ -395,6 +438,8 @@ namespace dd
     bool _share_weights_in_stack = NBEATS_DEFAULT_SHARE_WEIGHTS;
     std::vector<BlockType> _stack_types = NBEATS_DEFAULT_STACK_TYPES;
     std::vector<int> _thetas_dims = NBEATS_DEFAULT_THETAS;
+    double _backcast_loss_coef
+        = 1; /** < Coefficient applied to backcast loss */
 
     std::vector<Stack> _stacks;
     torch::nn::Linear _fcn{ nullptr };

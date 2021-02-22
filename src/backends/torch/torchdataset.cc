@@ -137,6 +137,7 @@ namespace dd
         _dbData = std::shared_ptr<db::DB>(db::GetDB(_backend));
         _dbData->Open(_dbFullName, db::NEW);
         _txn = std::shared_ptr<db::Transaction>(_dbData->NewTransaction());
+        _logger->info("Preparing db of {}x{} images", bgr.cols, bgr.rows);
       }
 
     // data & target keys
@@ -255,8 +256,7 @@ namespace dd
 
     if (_shuffle)
       {
-        auto seed = _seed == -1 ? static_cast<long>(time(NULL)) : _seed;
-        std::shuffle(_indices.begin(), _indices.end(), std::mt19937(seed));
+        std::shuffle(_indices.begin(), _indices.end(), _rng);
       }
   }
 
@@ -296,7 +296,7 @@ namespace dd
     std::vector<BatchToStack> data, target;
     bool first_iter = true;
 
-    if (!_db)
+    if (!_db) // Note: no data augmentation if no db
       {
         if (!_lfiles.empty()) // prefetch batch from file list
           {
@@ -428,6 +428,9 @@ namespace dd
                 torch::Tensor targett;
                 read_image_from_db(datas, targets, bgr, targett, inputc->_bw);
 
+                // data augmentation can apply here, with OpenCV
+                _img_rand_aug_cv.augment(bgr);
+
                 torch::Tensor imgt
                     = image_to_tensor(bgr, inputc->height(), inputc->width());
 
@@ -495,7 +498,7 @@ namespace dd
 
     try
       {
-        if (dimg.read_file(fname))
+        if (dimg.read_file(fname, -1))
           {
             this->_logger->error("Uri failed: {}", fname);
           }
@@ -527,7 +530,7 @@ namespace dd
 
     try
       {
-        if (dimg.read_file(fname))
+        if (dimg.read_file(fname, -1))
           {
             this->_logger->error("Uri failed: {}", fname);
           }
@@ -604,5 +607,82 @@ namespace dd
         ++n;
       }
     return targett;
+  }
+
+  void TorchMultipleDataset::add_db_elt(const size_t &set_id,
+                                        const int64_t &index,
+                                        const std::string &data,
+                                        const std::string &target)
+  {
+    _datasets[set_id].add_db_elt(index, data, target);
+  }
+
+  int TorchMultipleDataset::add_image_file(const size_t id,
+                                           const std::string &fname,
+                                           const int &target,
+                                           const int &height, const int &width)
+  {
+    return _datasets[id].add_image_file(fname, target, height, width);
+  }
+
+  int TorchMultipleDataset::add_image_file(const size_t id,
+                                           const std::string &fname,
+                                           const std::vector<double> &target,
+                                           const int &height, const int &width)
+  {
+    return _datasets[id].add_image_file(fname, target, height, width);
+  }
+
+  void TorchMultipleDataset::set_list(
+      const std::vector<
+          std::vector<std::pair<std::string, std::vector<double>>>> &lsfiles)
+  {
+    for (size_t i = 0; i < lsfiles.size(); ++i)
+      _datasets[i].set_list(lsfiles[i]);
+  }
+
+  void TorchMultipleDataset::add_tests_names(
+      const std::vector<std::string> &longnames)
+  {
+    _datasets.resize(_datasets.size() + longnames.size());
+    _datasets_names.resize(_datasets_names.size() + longnames.size());
+    _dbFullNames.resize(_dbFullNames.size() + longnames.size());
+    for (size_t i = 0; i < longnames.size(); ++i)
+      {
+        _datasets_names[_datasets_names.size() - longnames.size() + i]
+            = fileops::shortname(longnames[i]);
+        set_db_name(_dbFullNames.size() - longnames.size() + i, longnames[i]);
+        init_set(_datasets.size() - longnames.size() + i);
+      }
+  }
+
+  void TorchMultipleDataset::add_test_name(std::string longname)
+  {
+    std::string name = fileops::shortname(longname);
+    _datasets.resize(_datasets.size() + 1);
+    _datasets_names.resize(_datasets_names.size() + 1);
+    _datasets_names[_datasets_names.size() - 1] = name;
+    if (_db)
+      {
+        _dbFullNames.resize(_dbFullNames.size() + 1);
+        set_db_name(_dbFullNames.size() - 1);
+      }
+    init_set(_datasets.size() - 1);
+  }
+
+  void TorchMultipleDataset::add_db_name(std::string dblongname)
+  {
+    std::string dbname = fileops::shortname(dblongname);
+    _datasets.resize(_datasets.size() + 1);
+    _datasets_names.resize(_datasets_names.size() + 1);
+    if (!_db)
+      {
+        throw InputConnectorBadParamException(
+            "trying to add a db name while dataset is not of type db");
+      }
+    _dbFullNames.resize(_dbFullNames.size() + 1);
+    _dbFullNames[_dbFullNames.size() - 1] = dblongname;
+    test_name_from_db_name(_datasets.size() - 1);
+    init_set(_datasets.size() - 1);
   }
 }

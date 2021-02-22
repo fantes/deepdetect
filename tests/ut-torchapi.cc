@@ -51,6 +51,8 @@ static std::string resnet50_train_data_classif
       "list_all_shuf_rel_classif.txt";
 static std::string resnet50_test_data
     = "../examples/torch/resnet50_training_torch_small/test/";
+static std::string resnet50_test_cats_data
+    = "../examples/torch/resnet50_training_torch_small/test_cats/";
 static std::string resnet50_test_image
     = "../examples/torch/resnet50_training_torch_small/train/cats/"
       "cat.10097.jpg";
@@ -71,6 +73,8 @@ static std::string sinus = "../examples/all/sinus/";
 
 static std::string iterations_nbeats_cpu = "100";
 static std::string iterations_nbeats_gpu = "1000";
+static std::string iterations_ttransformer_cpu = "100";
+static std::string iterations_ttransformer_gpu = "1000";
 
 static std::string iterations_resnet50 = "200";
 static std::string iterations_vit = "200";
@@ -314,9 +318,9 @@ TEST(torchapi, service_train_images_split)
   ASSERT_TRUE(!fileops::file_exists(resnet50_train_repo + "checkpoint-"
                                     + iterations_resnet50 + ".pt"));
   fileops::clear_directory(resnet50_train_repo + "train.lmdb");
-  fileops::clear_directory(resnet50_train_repo + "test.lmdb");
+  fileops::clear_directory(resnet50_train_repo + "test_0.lmdb");
   fileops::remove_dir(resnet50_train_repo + "train.lmdb");
-  fileops::remove_dir(resnet50_train_repo + "test.lmdb");
+  fileops::remove_dir(resnet50_train_repo + "test_0.lmdb");
 }
 
 TEST(torchapi, service_train_images)
@@ -333,7 +337,7 @@ TEST(torchapi, service_train_images)
         "\"supervised\",\"model\":{\"repository\":\""
         + resnet50_train_repo
         + "\"},\"parameters\":{\"input\":{\"connector\":\"image\","
-          "\"width\":224,\"height\":224,\"db\":true},\"mllib\":{\"nclasses\":"
+          "\"width\":256,\"height\":256,\"db\":true},\"mllib\":{\"nclasses\":"
           "2,\"finetuning\":true,\"gpu\":true}}}";
   std::string joutstr = japi.jrender(japi.service_create(sname, jstr));
   ASSERT_EQ(created_str, joutstr);
@@ -345,7 +349,9 @@ TEST(torchapi, service_train_images)
         + iterations_resnet50 + ",\"base_lr\":" + torch_lr
         + ",\"iter_size\":4,\"solver_type\":\"ADAM\",\"test_"
           "interval\":200},\"net\":{\"batch_size\":4},"
-          "\"resume\":false},"
+          "\"resume\":false,\"mirror\":true,\"rotate\":true,\"crop_size\":224,"
+          "\"cutout\":0.5}"
+          ","
           "\"input\":{\"seed\":12345,\"db\":true,\"shuffle\":true},"
           "\"output\":{\"measure\":[\"f1\",\"acc\"]}},\"data\":[\""
         + resnet50_train_data + "\",\"" + resnet50_test_data + "\"]}";
@@ -357,7 +363,7 @@ TEST(torchapi, service_train_images)
   ASSERT_EQ(201, jd["status"]["code"]);
 
   ASSERT_TRUE(jd["body"]["measure"]["acc"].GetDouble() <= 1) << "accuracy";
-  ASSERT_TRUE(jd["body"]["measure"]["acc"].GetDouble() >= 0.51)
+  ASSERT_TRUE(jd["body"]["measure"]["acc"].GetDouble() >= 0.49)
       << "accuracy good";
   ASSERT_TRUE(jd["body"]["measure"]["f1"].GetDouble() <= 1) << "f1";
 
@@ -395,9 +401,168 @@ TEST(torchapi, service_train_images)
                                     + iterations_resnet50 + ".pt"));
 
   fileops::clear_directory(resnet50_train_repo + "train.lmdb");
-  fileops::clear_directory(resnet50_train_repo + "test.lmdb");
+  fileops::clear_directory(resnet50_train_repo + "test_0.lmdb");
   fileops::remove_dir(resnet50_train_repo + "train.lmdb");
-  fileops::remove_dir(resnet50_train_repo + "test.lmdb");
+  fileops::remove_dir(resnet50_train_repo + "test_0.lmdb");
+}
+
+TEST(torchapi, service_train_images_multiple_testsets)
+{
+  torch::manual_seed(torch_seed);
+  at::globalContext().setDeterministic(true);
+
+  mkdir(resnet50_test_cats_data.c_str(), 0775);
+  mkdir((resnet50_test_cats_data + "dogs").c_str(), 0775);
+
+  int sym
+      = symlink("../test/cats/", (resnet50_test_cats_data + "cats").c_str());
+  (void)sym;
+
+  // Create service
+  JsonAPI japi;
+  std::string sname = "imgserv";
+  std::string jstr
+      = "{\"mllib\":\"torch\",\"description\":\"image\",\"type\":"
+        "\"supervised\",\"model\":{\"repository\":\""
+        + resnet50_train_repo
+        + "\"},\"parameters\":{\"input\":{\"connector\":\"image\","
+          "\"width\":224,\"height\":224,\"db\":false},\"mllib\":{\"nclasses\":"
+          "2,\"finetuning\":true,\"gpu\":true}}}";
+  std::string joutstr = japi.jrender(japi.service_create(sname, jstr));
+  ASSERT_EQ(created_str, joutstr);
+
+  // Train
+  std::string jtrainstr
+      = "{\"service\":\"imgserv\",\"async\":false,\"parameters\":{"
+        "\"mllib\":{\"solver\":{\"iterations\":5,\"base_lr\":"
+        + torch_lr
+        + ",\"iter_size\":4,\"solver_type\":\"ADAM\",\"test_"
+          "interval\":2},\"net\":{\"batch_size\":4},"
+          "\"resume\":false},"
+          "\"input\":{\"seed\":12345,\"db\":false,\"shuffle\":true},"
+          "\"output\":{\"measure\":[\"f1\",\"acc\"]}},\"data\":[\""
+        + resnet50_train_data + "\",\"" + resnet50_test_data + "\",\""
+        + resnet50_test_cats_data + "\"]}";
+  joutstr = japi.jrender(japi.service_train(jtrainstr));
+  JDoc jd;
+  std::cout << "joutstr=" << joutstr << std::endl;
+  jd.Parse<rapidjson::kParseNanAndInfFlag>(joutstr.c_str());
+  ASSERT_TRUE(!jd.HasParseError());
+  ASSERT_EQ(201, jd["status"]["code"]);
+
+  ASSERT_TRUE(jd["body"].HasMember("measure"));
+
+  ASSERT_TRUE(jd["body"]["measures"].IsArray());
+  ASSERT_EQ(jd["body"]["measures"].Size(), 2);
+
+  ASSERT_TRUE(
+      fileops::file_exists(resnet50_train_repo + "best_model_test_0.txt"));
+  remove((resnet50_train_repo + "best_model_test_0.txt").c_str());
+  ASSERT_TRUE(
+      fileops::file_exists(resnet50_train_repo + "best_model_test_1.txt"));
+  remove((resnet50_train_repo + "best_model_test_1.txt").c_str());
+  ASSERT_TRUE(fileops::file_exists(resnet50_train_repo + "best_model.txt"));
+  remove((resnet50_train_repo + "best_model.txt").c_str());
+
+  std::unordered_set<std::string> lfiles;
+  fileops::list_directory(resnet50_train_repo, true, false, false, lfiles);
+  for (std::string ff : lfiles)
+    {
+      if (ff.find("checkpoint") != std::string::npos
+          || ff.find("solver") != std::string::npos)
+        remove(ff.c_str());
+    }
+  ASSERT_TRUE(!fileops::file_exists(resnet50_train_repo + "checkpoint-"
+                                    + iterations_resnet50 + ".ptw"));
+  ASSERT_TRUE(!fileops::file_exists(resnet50_train_repo + "checkpoint-"
+                                    + iterations_resnet50 + ".pt"));
+
+  fileops::clear_directory(resnet50_train_repo + "train.lmdb");
+  fileops::clear_directory(resnet50_train_repo + "train.lmdb");
+  remove((resnet50_test_cats_data + "cats").c_str());
+  remove((resnet50_test_cats_data + "dogs").c_str());
+  fileops::remove_dir(resnet50_test_cats_data);
+}
+
+TEST(torchapi, service_train_images_multiple_testsets_db)
+{
+  torch::manual_seed(torch_seed);
+  at::globalContext().setDeterministic(true);
+
+  mkdir(resnet50_test_cats_data.c_str(), 0775);
+  mkdir((resnet50_test_cats_data + "dogs").c_str(), 0775);
+
+  ASSERT_EQ(
+      symlink("../test/cats/", (resnet50_test_cats_data + "cats").c_str()), 0);
+
+  // Create service
+  JsonAPI japi;
+  std::string sname = "imgserv";
+  std::string jstr
+      = "{\"mllib\":\"torch\",\"description\":\"image\",\"type\":"
+        "\"supervised\",\"model\":{\"repository\":\""
+        + resnet50_train_repo
+        + "\"},\"parameters\":{\"input\":{\"connector\":\"image\","
+          "\"width\":224,\"height\":224,\"db\":true},\"mllib\":{\"nclasses\":"
+          "2,\"finetuning\":true,\"gpu\":true}}}";
+  std::string joutstr = japi.jrender(japi.service_create(sname, jstr));
+  ASSERT_EQ(created_str, joutstr);
+
+  // Train
+  std::string jtrainstr
+      = "{\"service\":\"imgserv\",\"async\":false,\"parameters\":{"
+        "\"mllib\":{\"solver\":{\"iterations\":5,\"base_lr\":"
+        + torch_lr
+        + ",\"iter_size\":4,\"solver_type\":\"ADAM\",\"test_"
+          "interval\":2},\"net\":{\"batch_size\":4},"
+          "\"resume\":false},"
+          "\"input\":{\"seed\":12345,\"db\":true,\"shuffle\":true},"
+          "\"output\":{\"measure\":[\"f1\",\"acc\"]}},\"data\":[\""
+        + resnet50_train_data + "\",\"" + resnet50_test_data + "\",\""
+        + resnet50_test_cats_data + "\"]}";
+  joutstr = japi.jrender(japi.service_train(jtrainstr));
+  JDoc jd;
+  std::cout << "joutstr=" << joutstr << std::endl;
+  jd.Parse<rapidjson::kParseNanAndInfFlag>(joutstr.c_str());
+  ASSERT_TRUE(!jd.HasParseError());
+  ASSERT_EQ(201, jd["status"]["code"]);
+
+  ASSERT_TRUE(jd["body"].HasMember("measure"));
+
+  ASSERT_TRUE(jd["body"]["measures"].IsArray());
+  ASSERT_EQ(jd["body"]["measures"].Size(), 2);
+
+  ASSERT_TRUE(
+      fileops::file_exists(resnet50_train_repo + "best_model_test_0.txt"));
+  remove((resnet50_train_repo + "best_model_test_0.txt").c_str());
+  ASSERT_TRUE(
+      fileops::file_exists(resnet50_train_repo + "best_model_test_1.txt"));
+  remove((resnet50_train_repo + "best_model_test_1.txt").c_str());
+  ASSERT_TRUE(fileops::file_exists(resnet50_train_repo + "best_model.txt"));
+  remove((resnet50_train_repo + "best_model.txt").c_str());
+
+  std::unordered_set<std::string> lfiles;
+  fileops::list_directory(resnet50_train_repo, true, false, false, lfiles);
+  for (std::string ff : lfiles)
+    {
+      if (ff.find("checkpoint") != std::string::npos
+          || ff.find("solver") != std::string::npos)
+        remove(ff.c_str());
+    }
+  ASSERT_TRUE(!fileops::file_exists(resnet50_train_repo + "checkpoint-"
+                                    + iterations_resnet50 + ".ptw"));
+  ASSERT_TRUE(!fileops::file_exists(resnet50_train_repo + "checkpoint-"
+                                    + iterations_resnet50 + ".pt"));
+
+  fileops::clear_directory(resnet50_train_repo + "train.lmdb");
+  fileops::clear_directory(resnet50_train_repo + "test_0.lmdb");
+  fileops::clear_directory(resnet50_train_repo + "test_1.lmdb");
+  remove((resnet50_test_cats_data + "cats").c_str());
+  remove((resnet50_test_cats_data + "dogs").c_str());
+  fileops::remove_dir(resnet50_test_cats_data);
+  fileops::remove_dir(resnet50_train_repo + "train.lmdb");
+  fileops::remove_dir(resnet50_train_repo + "test_0.lmdb");
+  fileops::remove_dir(resnet50_train_repo + "test_1.lmdb");
 }
 
 TEST(torchapi, service_train_images_split_list)
@@ -455,9 +620,9 @@ TEST(torchapi, service_train_images_split_list)
                                     + iterations_resnet50 + ".pt"));
 
   fileops::clear_directory(resnet50_train_repo + "train.lmdb");
-  fileops::clear_directory(resnet50_train_repo + "test.lmdb");
+  fileops::clear_directory(resnet50_train_repo + "test_0.lmdb");
   fileops::remove_dir(resnet50_train_repo + "train.lmdb");
-  fileops::remove_dir(resnet50_train_repo + "test.lmdb");
+  fileops::remove_dir(resnet50_train_repo + "test_0.lmdb");
 }
 
 TEST(torchapi, service_train_images_split_regression_db_true)
@@ -501,7 +666,7 @@ TEST(torchapi, service_train_images_split_regression_db_true)
   ASSERT_EQ(201, jd["status"]["code"]);
 
   ASSERT_TRUE(jd["body"]["measure"]["iteration"] == 200) << "iterations";
-  ASSERT_TRUE(jd["body"]["measure"]["eucll"].GetDouble() <= 12.0) << "eucll";
+  ASSERT_TRUE(jd["body"]["measure"]["eucll"].GetDouble() <= 15.0) << "eucll";
 
   std::unordered_set<std::string> lfiles;
   fileops::list_directory(resnet50_train_repo, true, false, false, lfiles);
@@ -517,9 +682,9 @@ TEST(torchapi, service_train_images_split_regression_db_true)
                                     + iterations_resnet50 + ".pt"));
 
   fileops::clear_directory(resnet50_train_repo + "train.lmdb");
-  fileops::clear_directory(resnet50_train_repo + "test.lmdb");
+  fileops::clear_directory(resnet50_train_repo + "test_0.lmdb");
   fileops::remove_dir(resnet50_train_repo + "train.lmdb");
-  fileops::remove_dir(resnet50_train_repo + "test.lmdb");
+  fileops::remove_dir(resnet50_train_repo + "test_0.lmdb");
 }
 
 TEST(torchapi, service_train_images_split_regression_db_false)
@@ -562,7 +727,7 @@ TEST(torchapi, service_train_images_split_regression_db_false)
   ASSERT_EQ(201, jd["status"]["code"]);
 
   ASSERT_TRUE(jd["body"]["measure"]["iteration"] == 200) << "iterations";
-  ASSERT_TRUE(jd["body"]["measure"]["eucll"].GetDouble() <= 12.0) << "eucll";
+  ASSERT_TRUE(jd["body"]["measure"]["eucll"].GetDouble() <= 15.0) << "eucll";
 
   std::unordered_set<std::string> lfiles;
   fileops::list_directory(resnet50_train_repo, true, false, false, lfiles);
@@ -578,9 +743,9 @@ TEST(torchapi, service_train_images_split_regression_db_false)
                                     + iterations_resnet50 + ".pt"));
 
   fileops::clear_directory(resnet50_train_repo + "train.lmdb");
-  fileops::clear_directory(resnet50_train_repo + "test.lmdb");
+  fileops::clear_directory(resnet50_train_repo + "test_0.lmdb");
   fileops::remove_dir(resnet50_train_repo + "train.lmdb");
-  fileops::remove_dir(resnet50_train_repo + "test.lmdb");
+  fileops::remove_dir(resnet50_train_repo + "test_0.lmdb");
 }
 
 TEST(torchapi, service_train_images_native)
@@ -756,6 +921,64 @@ TEST(torchapi, service_train_txt_classification)
   ASSERT_TRUE(!fileops::file_exists(bert_train_repo + "solver-3.pt"));
 }
 
+TEST(torchapi, service_train_txt_classification_nosplit)
+{
+  setenv("CUBLAS_WORKSPACE_CONFIG", ":4096:8", true);
+  torch::manual_seed(torch_seed);
+  at::globalContext().setDeterministic(true);
+
+  // create service
+  JsonAPI japi;
+  std::string sname = "txtserv";
+  std::string jstr = "{\"mllib\":\"torch\",\"description\":\"bert\",\"type\":"
+                     "\"supervised\",\"model\":{\"repository\":\""
+                     + bert_train_repo
+                     + "\"},\"parameters\":{\"input\":{\"connector\":\"txt\","
+                       "\"ordered_words\":true,"
+                       "\"wordpiece_tokens\":true,\"punctuation_tokens\":true,"
+                       "\"sequence\":512},\"mllib\":{\"template\":\"bert\","
+                       "\"nclasses\":2,\"finetuning\":true,\"gpu\":true}}}";
+  std::string joutstr = japi.jrender(japi.service_create(sname, jstr));
+  ASSERT_EQ(created_str, joutstr);
+
+  // train
+  std::string jtrainstr
+      = "{\"service\":\"txtserv\",\"async\":false,\"parameters\":{"
+        "\"mllib\":{\"solver\":{\"iterations\":3,\"base_lr\":"
+        + torch_lr
+        + ",\"iter_"
+          "size\":2,\"solver_type\":\"ADAM\"},\"net\":{\"batch_size\":2}},"
+          "\"input\":{\"seed\":12345,\"shuffle\":true},"
+          "\"output\":{\"measure\":[\"f1\",\"acc\",\"mcll\",\"cmdiag\","
+          "\"cmfull\"]}},\"data\":[\""
+        + bert_train_data + "\",\"" + bert_train_data + "\"]}";
+  joutstr = japi.jrender(japi.service_train(jtrainstr));
+  JDoc jd;
+  std::cout << "joutstr=" << joutstr << std::endl;
+  jd.Parse<rapidjson::kParseNanAndInfFlag>(joutstr.c_str());
+  ASSERT_TRUE(!jd.HasParseError());
+  ASSERT_EQ(201, jd["status"]["code"]);
+  ASSERT_TRUE(abs(jd["body"]["measure"]["iteration"].GetDouble() - 3)
+              < 0.00001)
+      << "iterations";
+  // This assertion is non-deterministic
+  // ASSERT_TRUE(jd["body"]["measure"]["train_loss"].GetDouble() > 1.0) <<
+  // "train_loss";
+  ASSERT_TRUE(jd["body"]["measure"]["acc"].GetDouble() <= 1) << "accuracy";
+  ASSERT_TRUE(jd["body"]["measure"]["f1"].GetDouble() <= 1) << "f1";
+
+  std::unordered_set<std::string> lfiles;
+  fileops::list_directory(bert_train_repo, true, false, false, lfiles);
+  for (std::string ff : lfiles)
+    {
+      if (ff.find("checkpoint") != std::string::npos
+          || ff.find("solver") != std::string::npos)
+        remove(ff.c_str());
+    }
+  ASSERT_TRUE(!fileops::file_exists(bert_train_repo + "checkpoint-3.pt"));
+  ASSERT_TRUE(!fileops::file_exists(bert_train_repo + "solver-3.pt"));
+}
+
 #endif
 
 TEST(torchapi, service_train_csvts_nbeats)
@@ -846,7 +1069,110 @@ TEST(torchapi, service_train_csvts_nbeats)
   ASSERT_TRUE(jd["body"]["predictions"][0]["series"][0]["out"][0].GetDouble()
               >= -1.5);
 
+  // predict from memory
+  std::stringstream mem_data;
+  for (int i = 0; i < 50; ++i)
+    {
+      if (i != 0)
+        mem_data << "\\n";
+      mem_data << i << "," << i;
+    }
+
+  jpredictstr
+      = "{\"service\":\"" + sname
+        + "\",\"parameters\":{\"input\":{\"backcast_timesteps\":50,\"forecast_"
+          "timesteps\":50,\"connector\":"
+          "\"csvts\",\"scale\":true,\"ignore\":[\"output\"],\"continuation\":"
+          "true,\"min_vals\":"
+        + str_min_vals + ",\"max_vals\":" + str_max_vals
+        + "},\"output\":{}},\"data\":[\"input,output\", \"" + mem_data.str()
+        + "\"]}";
+
+  joutstr = japi.jrender(japi.service_predict(jpredictstr));
+  std::cout << "joutstr=" << joutstr << std::endl;
+  jd.Parse(joutstr.c_str());
+  ASSERT_TRUE(!jd.HasParseError());
+  ASSERT_EQ(200, jd["status"]["code"]);
+  uri = jd["body"]["predictions"][0]["uri"].GetString();
+  ASSERT_EQ("0", uri);
+  ASSERT_TRUE(jd["body"]["predictions"][0]["series"].IsArray());
+  ASSERT_TRUE(jd["body"]["predictions"][0]["series"].Size() == 50);
+  ASSERT_TRUE(jd["body"]["predictions"][0]["series"][0]["out"][0].IsDouble());
+
   //  remove service
+  jstr = "{\"clear\":\"full\"}";
+  joutstr = japi.jrender(japi.service_delete(sname, jstr));
+  ASSERT_EQ(ok_str, joutstr);
+  rmdir(csvts_nbeats_repo.c_str());
+}
+
+TEST(torchapi, service_train_csvts_nbeats_multiple_testsets)
+{
+  torch::manual_seed(torch_seed);
+  at::globalContext().setDeterministic(true);
+
+  // create service
+  JsonAPI japi;
+  std::string sname = "nbeats";
+  std::string csvts_data = sinus + "train";
+  std::string csvts_test = sinus + "test";
+  std::string csvts_predict = sinus + "predict";
+  std::string csvts_nbeats_repo = "csvts_nbeats";
+  mkdir(csvts_nbeats_repo.c_str(), 0777);
+
+  std::string jstr
+      = "{\"mllib\":\"torch\",\"description\":\"nbeats\",\"type\":"
+        "\"supervised\",\"model\":{\"repository\":\""
+        + csvts_nbeats_repo
+        + "\"},\"parameters\":{\"input\":{\"connector\":\"csvts\",\"ignore\":["
+          "\"output\"],\"backcast_timesteps\":50,\"forecast_timesteps\":50},"
+          "\"mllib\":{\"template\":\"nbeats\","
+          "\"template_params\":[\"t2\",\"s4\",\"g3\",\"b3\"],"
+          "\"loss\":\"L1\"}}}";
+
+  std::string joutstr = japi.jrender(japi.service_create(sname, jstr));
+  ASSERT_EQ(created_str, joutstr);
+
+  std::string csvts_test2 = sinus + "test_2";
+  ASSERT_EQ(symlink("./test", (sinus + "test_2").c_str()), 0);
+  // train
+  std::string jtrainstr
+      = "{\"service\":\"" + sname
+        + "\",\"async\":false,\"parameters\":{\"input\":{\"shuffle\":true,"
+          "\"separator\":\",\",\"scale\":true,\"backcast_timesteps\":50,"
+          "\"forecast_timesteps\":50,\"ignore\":["
+          "\"output\"]},\"mllib\":{\"gpu\":false,\"solver\":{\"iterations\":10"
+        + ",\"test_interval\":3,\"base_lr\":0.1,\"snapshot\":500,\"test_"
+          "initialization\":false,\"solver_type\":\"ADAM\"},\"net\":{\"batch_"
+          "size\":2,\"test_batch_"
+          "size\":10}},\"output\":{\"measure\":[\"L1\",\"L2\"]}},\"data\":[\""
+        + csvts_data + "\",\"" + csvts_test + "\",\"" + csvts_test2 + "\"]}";
+
+  std::cerr << "jtrainstr=" << jtrainstr << std::endl;
+  joutstr = japi.jrender(japi.service_train(jtrainstr));
+  std::cout << "joutstr=" << joutstr << std::endl;
+  JDoc jd;
+  jd.Parse(joutstr.c_str());
+  ASSERT_TRUE(!jd.HasParseError());
+  ASSERT_TRUE(jd.HasMember("status"));
+  ASSERT_EQ(201, jd["status"]["code"].GetInt());
+  ASSERT_EQ("Created", jd["status"]["msg"]);
+  ASSERT_TRUE(jd.HasMember("head"));
+  ASSERT_EQ("/train", jd["head"]["method"]);
+  ASSERT_TRUE(jd["head"]["time"].GetDouble() >= 0);
+  ASSERT_TRUE(jd.HasMember("body"));
+  ASSERT_TRUE(jd["body"]["measure"].HasMember("train_loss"));
+  ASSERT_TRUE(fabs(jd["body"]["measure"]["train_loss"].GetDouble()) > 0);
+  ASSERT_TRUE(jd["body"]["measure"].HasMember("L1_mean_error"));
+  ASSERT_TRUE(jd["body"]["measure"]["L1_max_error_0"].GetDouble() > 0.0);
+  ASSERT_TRUE(jd["body"]["parameters"]["input"].HasMember("max_vals"));
+  ASSERT_TRUE(jd["body"]["parameters"]["input"].HasMember("min_vals"));
+
+  ASSERT_TRUE(jd["body"]["measures"].IsArray());
+  ASSERT_EQ(jd["body"]["measures"].Size(), 2);
+
+  //  remove service
+  remove((sinus + "test_2").c_str());
   jstr = "{\"clear\":\"full\"}";
   joutstr = japi.jrender(japi.service_delete(sname, jstr));
   ASSERT_EQ(ok_str, joutstr);
@@ -955,6 +1281,113 @@ TEST(torchapi, service_train_csvts_nbeats_forecast)
           "10,\"ignore\":[\"output\"]},\"mllib\":{\"gpu\":false,\"solver\":{"
           "\"iterations\":"
         + iterations_nbeats_cpu
+        + ",\"test_interval\":10,\"base_lr\":0.1,\"snapshot\":500,\"test_"
+          "initialization\":false,\"solver_type\":\"ADAM\"},\"net\":{\"batch_"
+          "size\":2,\"test_batch_"
+          "size\":10}},\"output\":{\"measure\":[\"L1\",\"L2\"]}},\"data\":[\""
+        + csvts_data + "\",\"" + csvts_test + "\"]}";
+
+  std::cerr << "jtrainstr=" << jtrainstr << std::endl;
+  joutstr = japi.jrender(japi.service_train(jtrainstr));
+  std::cout << "joutstr=" << joutstr << std::endl;
+  JDoc jd;
+  jd.Parse(joutstr.c_str());
+  ASSERT_TRUE(!jd.HasParseError());
+  ASSERT_TRUE(jd.HasMember("status"));
+  ASSERT_EQ(201, jd["status"]["code"].GetInt());
+  ASSERT_EQ("Created", jd["status"]["msg"]);
+  ASSERT_TRUE(jd.HasMember("head"));
+  ASSERT_EQ("/train", jd["head"]["method"]);
+  ASSERT_TRUE(jd["head"]["time"].GetDouble() >= 0);
+  ASSERT_TRUE(jd.HasMember("body"));
+  ASSERT_TRUE(jd["body"]["measure"].HasMember("train_loss"));
+  ASSERT_TRUE(fabs(jd["body"]["measure"]["train_loss"].GetDouble()) > 0);
+  ASSERT_TRUE(jd["body"]["measure"].HasMember("L1_mean_error"));
+  ASSERT_TRUE(jd["body"]["measure"]["L1_max_error_0"].GetDouble() > 0.0);
+  ASSERT_TRUE(jd["body"]["parameters"]["input"].HasMember("max_vals"));
+  ASSERT_TRUE(jd["body"]["parameters"]["input"].HasMember("min_vals"));
+
+  std::string str_min_vals
+      = japi.jrender(jd["body"]["parameters"]["input"]["min_vals"]);
+  std::string str_max_vals
+      = japi.jrender(jd["body"]["parameters"]["input"]["max_vals"]);
+
+  //  predict
+  std::string jpredictstr = "{\"service\":\"" + sname
+                            + "\",\"parameters\":{\"input\":{\"backcast_"
+                              "timesteps\":40,\"connector\":"
+                              "\"csvts\",\"scale\":true,\"forecast_"
+                              "timesteps\":10,\"ignore\":[\"output\"],"
+                              "\"continuation\":"
+                              "true,\"min_vals\":"
+                            + str_min_vals + ",\"max_vals\":" + str_max_vals
+                            + "},\"output\":{}},\"data\":[\"" + csvts_predict
+                            + "\"]}";
+  joutstr = japi.jrender(japi.service_predict(jpredictstr));
+  std::cout << "joutstr=" << joutstr << std::endl;
+  jd.Parse(joutstr.c_str());
+  ASSERT_TRUE(!jd.HasParseError());
+  ASSERT_EQ(200, jd["status"]["code"]);
+  std::string uri = jd["body"]["predictions"][0]["uri"].GetString();
+  ASSERT_EQ("../examples/all/sinus/predict/seq_2.csv #0_49", uri);
+  ASSERT_TRUE(jd["body"]["predictions"][0]["series"].IsArray());
+  ASSERT_EQ(jd["body"]["predictions"][0]["series"].Size(), 10);
+  ASSERT_TRUE(jd["body"]["predictions"][0]["series"][0]["out"][0].GetDouble()
+              >= -1.5);
+
+  //  remove service
+  jstr = "{\"clear\":\"full\"}";
+  joutstr = japi.jrender(japi.service_delete(sname, jstr));
+  ASSERT_EQ(ok_str, joutstr);
+  rmdir(csvts_nbeats_repo.c_str());
+}
+
+TEST(torchapi, service_train_ttransformer_forecast)
+{
+  setenv("CUBLAS_WORKSPACE_CONFIG", ":4096:8", true);
+  torch::manual_seed(torch_seed);
+  at::globalContext().setDeterministic(true);
+
+  // create service
+  JsonAPI japi;
+  std::string sname = "ttransformer";
+  std::string csvts_data = sinus + "train";
+  std::string csvts_test = sinus + "test";
+  std::string csvts_predict = sinus + "predict";
+  std::string csvts_nbeats_repo = "ttransformer";
+  mkdir(csvts_nbeats_repo.c_str(), 0777);
+
+  std::string jstr
+      = "{\"mllib\":\"torch\",\"description\":\"ttransformer\",\"type\":"
+        "\"supervised\",\"model\":{\"repository\":\""
+        + csvts_nbeats_repo
+        + "\"},\"parameters\":{\"input\":{\"connector\":\"csvts\","
+          "\"forecast_timesteps\":10,\"ignore\":[\"output\"],\"backcast_"
+          "timesteps\":40},"
+          "\"mllib\":"
+          "{\"template\":\"ttransformer\",\"template_params\":{\"embed\": "
+          "{\"layers\": 2,\"activation\": "
+          "\"relu\",\"dim\": 2,\"type\": \"step\",\"dropout\": "
+          "0.0},\"encoder\":{\"heads\": 1,\"layers\": 2,\"hidden_dim\": "
+          "2,\"dropout\": 0.0},\"positional_encoding\":{\"type\": "
+          "\"naive\",\"learn\": false,\"dropout\": "
+          "0.0},\"decoder\":{\"type\": "
+          "\"simple\",\"dropout\": 0.0,\"layers\": 1}},"
+          "\"loss\":\"L1\"}}}";
+
+  std::string joutstr = japi.jrender(japi.service_create(sname, jstr));
+  ASSERT_EQ(created_str, joutstr);
+
+  // train
+  std::string jtrainstr
+      = "{\"service\":\"" + sname
+        + "\",\"async\":false,\"parameters\":{\"input\":{\"seed\":12345,"
+          "\"shuffle\":true,"
+          "\"separator\":\",\",\"scale\":true,\"offset\":10,\"backcast_"
+          "timesteps\":40,\"forecast_timesteps\":"
+          "10,\"ignore\":[\"output\"]},\"mllib\":{\"gpu\":false,\"solver\":{"
+          "\"iterations\":"
+        + iterations_ttransformer_cpu
         + ",\"test_interval\":10,\"base_lr\":0.1,\"snapshot\":500,\"test_"
           "initialization\":false,\"solver_type\":\"ADAM\"},\"net\":{\"batch_"
           "size\":2,\"test_batch_"
@@ -1496,6 +1929,7 @@ TEST(torchapi, image_extract)
   ASSERT_EQ(jd["body"]["predictions"][0]["vals"].Size(), 1000);
 }
 
+#ifndef CPU_ONLY
 TEST(torchapi, service_train_ranger)
 {
   setenv("CUBLAS_WORKSPACE_CONFIG", ":4096:8", true);
@@ -1573,9 +2007,9 @@ TEST(torchapi, service_train_ranger)
                                     + iterations_resnet50 + ".pt"));
 
   fileops::clear_directory(resnet50_train_repo + "train.lmdb");
-  fileops::clear_directory(resnet50_train_repo + "test.lmdb");
+  fileops::clear_directory(resnet50_train_repo + "test_0.lmdb");
   fileops::remove_dir(resnet50_train_repo + "train.lmdb");
-  fileops::remove_dir(resnet50_train_repo + "test.lmdb");
+  fileops::remove_dir(resnet50_train_repo + "test_0.lmdb");
 }
 
 TEST(torchapi, service_train_vit_images_gpu)
@@ -1583,6 +2017,7 @@ TEST(torchapi, service_train_vit_images_gpu)
   setenv("CUBLAS_WORKSPACE_CONFIG", ":4096:8", true);
   torch::manual_seed(torch_seed);
   at::globalContext().setDeterministic(true);
+  // torch::autograd::AnomalyMode::set_enabled(true);
 
   mkdir(vit_train_repo.c_str(), 0777);
 
@@ -1596,7 +2031,8 @@ TEST(torchapi, service_train_vit_images_gpu)
         + vit_train_repo
         + "\"},\"parameters\":{\"input\":{\"connector\":\"image\","
           "\"width\":224,\"height\":224,\"db\":true},\"mllib\":{\"nclasses\":"
-          "2,\"template\":\"vit\",\"gpu\":true}}}";
+          "2,\"template\":\"vit\",\"gpu\":true,\"template_params\":{\"vit_"
+          "flavor\":\"vit_tiny_patch16\",\"realformer\":true}}}}";
   std::string joutstr = japi.jrender(japi.service_create(sname, jstr));
   ASSERT_EQ(created_str, joutstr);
 
@@ -1659,9 +2095,9 @@ TEST(torchapi, service_train_vit_images_gpu)
                                     + iterations_vit + ".pt"));
 
   fileops::clear_directory(vit_train_repo + "train.lmdb");
-  fileops::clear_directory(vit_train_repo + "test.lmdb");
+  fileops::clear_directory(vit_train_repo + "test_0.lmdb");
   fileops::remove_dir(vit_train_repo + "train.lmdb");
-  fileops::remove_dir(vit_train_repo + "test.lmdb");
+  fileops::remove_dir(vit_train_repo + "test_0.lmdb");
 }
 
 TEST(torchapi, service_train_vit_images_multigpu)
@@ -1746,7 +2182,9 @@ TEST(torchapi, service_train_vit_images_multigpu)
                                     + iterations_vit + ".pt"));
 
   fileops::clear_directory(vit_train_repo + "train.lmdb");
-  fileops::clear_directory(vit_train_repo + "test.lmdb");
+  fileops::clear_directory(vit_train_repo + "test_0.lmdb");
   fileops::remove_dir(vit_train_repo + "train.lmdb");
-  fileops::remove_dir(vit_train_repo + "test.lmdb");
+  fileops::remove_dir(vit_train_repo + "test_0.lmdb");
 }
+
+#endif

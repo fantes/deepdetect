@@ -31,29 +31,40 @@ namespace dd
   NativeModule *
   NativeFactory::from_template(const std::string tdef,
                                const APIData &template_params,
-                               const TInputConnectorStrategy &inputc)
+                               const TInputConnectorStrategy &inputc,
+                               const std::shared_ptr<spdlog::logger> &logger)
   {
     (void)(tdef);
     (void)(template_params);
     (void)(inputc);
+    (void)(logger);
     return nullptr;
   }
 
   template <>
   NativeModule *NativeFactory::from_template<CSVTSTorchInputFileConn>(
       const std::string tdef, const APIData &template_params,
-      const CSVTSTorchInputFileConn &inputc)
+      const CSVTSTorchInputFileConn &inputc,
+      const std::shared_ptr<spdlog::logger> &logger)
   {
     if (tdef.find("nbeats") != std::string::npos)
       {
         std::vector<std::string> p;
+        double bc_loss_coef = 1;
         if (template_params.has("stackdef"))
           {
             p = template_params.get("stackdef")
                     .get<std::vector<std::string>>();
           }
-        return new NBeats(inputc, p);
+        if (template_params.has("backcast_loss_coef"))
+          {
+            bc_loss_coef
+                = template_params.get("backcast_loss_coef").get<double>();
+          }
+        return new NBeats(inputc, p, bc_loss_coef);
       }
+    else if (tdef.find("ttransformer") != std::string::npos)
+      return new TTransformer(inputc, template_params, logger);
     else
       return nullptr;
   }
@@ -61,12 +72,15 @@ namespace dd
   template <>
   NativeModule *NativeFactory::from_template<ImgTorchInputFileConn>(
       const std::string tdef, const APIData &template_params,
-      const ImgTorchInputFileConn &inputc)
+      const ImgTorchInputFileConn &inputc,
+      const std::shared_ptr<spdlog::logger> &logger)
   {
     (void)inputc;
+    (void)logger;
 
     if (tdef.find("vit") != std::string::npos)
       {
+
         return new ViT(inputc, template_params);
       }
     else if (VisionModelsFactory::is_vision_template(tdef))
@@ -80,6 +94,6 @@ namespace dd
   template NativeModule *
   NativeFactory::from_template(const std::string tdef,
                                const APIData &template_params,
-                               const TxtTorchInputFileConn &inputc);
-
+                               const TxtTorchInputFileConn &inputc,
+                               const std::shared_ptr<spdlog::logger> &logger);
 }
