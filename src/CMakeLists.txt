@@ -91,6 +91,11 @@ if (USE_TORCH)
     backends/torch/db_lmdb.cpp
     backends/torch/native/templates/nbeats.cc
     backends/torch/native/templates/vit.cc
+    backends/torch/native/templates/ttransformer.cc
+    backends/torch/native/templates/ttransformer/tembedder.cc
+    backends/torch/native/templates/ttransformer/positionalenc.cc
+    backends/torch/native/templates/ttransformer/tencoder.cc
+    backends/torch/native/templates/ttransformer/tdecoder.cc
     backends/torch/native/native_factory.cc
 	graph/basegraph.cc
     graph/operators.cc
@@ -121,6 +126,9 @@ endif()
 
 add_library(ddetect ${ddetect_SOURCES})
 add_dependencies(ddetect protobuf caffe_pb_h)
+if (BUILD_SPDLOG)
+  add_dependencies(ddetect spdlog)
+endif()
 if (USE_DLIB)
   add_dependencies(ddetect dlib)
 endif()

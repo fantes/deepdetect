@@ -55,8 +55,19 @@ namespace dd
       {
       }
 
-      ~MLPImpl()
+      MLPImpl &operator=(const MLPImpl &m)
       {
+        torch::nn::Module::operator=(m);
+        _input_dim = m._input_dim;
+        _hidden_dim = m._hidden_dim;
+        _output_dim = m._output_dim;
+        _act = m._act;
+        _drop = m._drop;
+
+        _fc1 = m._fc1;
+        _fc2 = m._fc2;
+        _drop1 = m._drop1;
+        return *this;
       }
 
       void reset()
@@ -89,10 +100,11 @@ namespace dd
                     const bool &qkv_bias = false,
                     const double &qk_scale = -1.0,
                     const double &attn_drop_val = 0.0,
-                    const double &proj_drop_val = 0.0)
+                    const double &proj_drop_val = 0.0,
+                    const bool &realformer = false)
           : _dim(dim), _num_heads(num_heads), _qkv_bias(qkv_bias),
             _qk_scale(qk_scale), _attn_drop_val(attn_drop_val),
-            _proj_drop_val(proj_drop_val)
+            _proj_drop_val(proj_drop_val), _realformer(realformer)
       {
         init_block();
       }
@@ -100,12 +112,29 @@ namespace dd
       AttentionImpl(const AttentionImpl &a)
           : torch::nn::Module(a), _dim(a._dim), _num_heads(a._num_heads),
             _qkv_bias(a._qkv_bias), _qk_scale(a._qk_scale),
-            _attn_drop_val(a._attn_drop_val), _proj_drop_val(a._proj_drop_val)
+            _attn_drop_val(a._attn_drop_val), _proj_drop_val(a._proj_drop_val),
+            _realformer(a._realformer)
       {
       }
 
-      ~AttentionImpl()
+      AttentionImpl &operator=(const AttentionImpl &a)
       {
+        torch::nn::Module::operator=(a);
+        _dim = a._dim;
+        _num_heads = a._num_heads;
+        _qkv_bias = a._qkv_bias;
+        _qk_scale = a._qk_scale;
+        _attn_drop_val = a._attn_drop_val;
+        _proj_drop_val = a._proj_drop_val;
+        _realformer = a._realformer;
+
+        _scale = a._scale;
+        _head_dim = a._head_dim;
+        _qkv = a._qkv;
+        _attn_drop = a._attn_drop;
+        _proj = a._proj;
+        _proj_drop = a._proj_drop;
+        return *this;
       }
 
       void reset()
@@ -113,7 +142,9 @@ namespace dd
         init_block();
       }
 
-      torch::Tensor forward(torch::Tensor x);
+      torch::Tensor residual_mha(torch::Tensor x, torch::Tensor &prev);
+
+      torch::Tensor forward(torch::Tensor x, torch::Tensor &prev);
 
     protected:
       void init_block();
@@ -127,6 +158,8 @@ namespace dd
 
       double _scale = 1.0;
       unsigned int _head_dim = 0;
+
+      bool _realformer = false;
 
       torch::nn::Linear _qkv{ nullptr };
       torch::nn::Dropout _attn_drop{ nullptr };
@@ -142,39 +175,55 @@ namespace dd
       BlockImpl(const int &dim, const int &num_heads,
                 const double &mlp_ratio = 4.0, const bool &qkv_bias = false,
                 const double &qk_scale = -1.0, const double &drop_val = 0.0,
-                const double &attn_drop_val = 0.0)
+                const double &attn_drop_val = 0.0,
+                const bool &realformer = false)
           : _dim(dim), _num_heads(num_heads), _mlp_ratio(mlp_ratio),
             _qkv_bias(qkv_bias), _qk_scale(qk_scale), _drop_val(drop_val),
-            _attn_drop_val(attn_drop_val)
+            _attn_drop_val(attn_drop_val), _realformer(realformer)
       {
-        init_block(_mlp_ratio, _qkv_bias, _qk_scale, _drop_val,
-                   _attn_drop_val);
+        init_block(_mlp_ratio, _qkv_bias, _qk_scale, _drop_val, _attn_drop_val,
+                   realformer);
       }
 
       BlockImpl(const BlockImpl &b)
           : torch::nn::Module(b), _dim(b._dim), _num_heads(b._num_heads),
             _mlp_ratio(b._mlp_ratio), _qkv_bias(b._qkv_bias),
             _qk_scale(b._qk_scale), _drop_val(b._drop_val),
-            _attn_drop_val(b._attn_drop_val)
+            _attn_drop_val(b._attn_drop_val), _realformer(b._realformer)
       {
       }
 
-      ~BlockImpl()
+      BlockImpl &operator=(const BlockImpl &b)
       {
+        torch::nn::Module::operator=(b);
+        _dim = b._dim;
+        _num_heads = b._num_heads;
+        _mlp_ratio = b._mlp_ratio;
+        _qkv_bias = b._qkv_bias;
+        _qk_scale = b._qk_scale;
+        _drop_val = b._drop_val;
+        _attn_drop_val = b._attn_drop_val;
+        _realformer = b._realformer;
+
+        _norm1 = b._norm1;
+        _attn = b._attn;
+        _norm2 = b._norm2;
+        _mlp = b._mlp;
+        return *this;
       }
 
       void reset()
       {
-        init_block(_mlp_ratio, _qkv_bias, _qk_scale, _drop_val,
-                   _attn_drop_val);
+        init_block(_mlp_ratio, _qkv_bias, _qk_scale, _drop_val, _attn_drop_val,
+                   _realformer);
       }
 
-      torch::Tensor forward(torch::Tensor x);
+      torch::Tensor forward(torch::Tensor x, torch::Tensor &prev);
 
     protected:
       void init_block(const double &mlp_ratio, const bool &qkv_bias,
                       const double &qk_scale, const double &drop,
-                      const double &attn_drop);
+                      const double &attn_drop, const bool &realformer);
 
       unsigned int _dim = 0;
       unsigned int _num_heads = 0;
@@ -184,9 +233,14 @@ namespace dd
       double _qk_scale;
       double _drop_val;
       double _attn_drop_val;
+      bool _realformer;
 
       torch::nn::LayerNorm _norm1{ nullptr };
+
+    public:
       Attention _attn{ nullptr };
+
+    protected:
       torch::nn::LayerNorm _norm2{ nullptr };
       MLP _mlp{ nullptr };
     };
@@ -210,8 +264,16 @@ namespace dd
       {
       }
 
-      ~PatchEmbedImpl()
+      PatchEmbedImpl &operator=(const PatchEmbedImpl &p)
       {
+        torch::nn::Module::operator=(p);
+        _img_size = p._img_size;
+        _patch_size = p._patch_size;
+        _in_chans = p._in_chans;
+        _embed_dim = p._embed_dim;
+
+        _proj = p._proj;
+        return *this;
       }
 
       void reset()
@@ -244,16 +306,17 @@ namespace dd
         const int &embed_dim = 768, const int &depth = 12,
         const int &num_heads = 12, const double &mlp_ratio = 4.0,
         const bool &qkv_bias = false, const double &qk_scale = -1.0,
-        const double &drop_rate = 0.0, const double &attn_drop_rate = 0.0)
+        const double &drop_rate = 0.0, const double &attn_drop_rate = 0.0,
+        const bool &realformer = false)
         : _img_size(img_size), _patch_size(patch_size), _in_chans(in_chans),
           _num_classes(num_classes), _embed_dim(embed_dim), _depth(depth),
           _num_heads(num_heads), _mlp_ratio(mlp_ratio), _qkv_bias(qkv_bias),
           _qk_scale(qk_scale), _drop_rate(drop_rate),
-          _attn_drop_rate(attn_drop_rate)
+          _attn_drop_rate(attn_drop_rate), _realformer(realformer)
     {
       init_block(_img_size, _patch_size, _in_chans, _embed_dim, _num_heads,
-                 _mlp_ratio, _qkv_bias, _qk_scale, _drop_rate,
-                 _attn_drop_rate);
+                 _mlp_ratio, _qkv_bias, _qk_scale, _drop_rate, _attn_drop_rate,
+                 _realformer);
     }
 
     ViT(const ImgTorchInputFileConn &inputc, const APIData &ad_params)
@@ -271,15 +334,39 @@ namespace dd
     {
     }
 
-    virtual ~ViT()
+    ViT &operator=(const ViT &v)
     {
+      torch::nn::Module::operator=(v);
+      _img_size = v._img_size;
+      _patch_size = v._patch_size;
+      _in_chans = v._in_chans;
+      _num_classes = v._num_classes;
+      _embed_dim = v._embed_dim;
+      _depth = v._depth;
+      _num_heads = v._num_heads;
+      _mlp_ratio = v._mlp_ratio;
+      _qkv_bias = v._qkv_bias;
+      _qk_scale = v._qk_scale;
+      _drop_rate = v._drop_rate;
+      _attn_drop_rate = v._attn_drop_rate;
+
+      _patch_embed = v._patch_embed;
+      _cls_token = v._cls_token;
+      _pos_embed = v._pos_embed;
+      _pos_drop = v._pos_drop;
+      _blocks = v._blocks;
+      _norm = v._norm;
+      _head = v._head;
+      return *this;
     }
+
+    virtual ~ViT() = default;
 
     void reset() override
     {
       init_block(_img_size, _patch_size, _in_chans, _embed_dim, _num_heads,
-                 _mlp_ratio, _qkv_bias, _qk_scale, _drop_rate,
-                 _attn_drop_rate);
+                 _mlp_ratio, _qkv_bias, _qk_scale, _drop_rate, _attn_drop_rate,
+                 _realformer);
     }
 
     void get_params_and_init_block(const ImgTorchInputFileConn &inputc,
@@ -327,7 +414,8 @@ namespace dd
                     const int &in_chans, const int &embed_dim,
                     const int &num_heads, const double &mlp_ratio,
                     const double &qkv_bias, const double &qk_scale,
-                    const double &drop_rate, const double &attn_drop_rate);
+                    const double &drop_rate, const double &attn_drop_rate,
+                    const bool &realformer);
 
     unsigned int _img_size = 224;
     unsigned int _patch_size = 16;
@@ -342,6 +430,7 @@ namespace dd
     double _drop_rate;
     double _attn_drop_rate;
     unsigned int _num_features;
+    bool _realformer = false;
 
     PatchEmbed _patch_embed{ nullptr };
     torch::Tensor _cls_token;

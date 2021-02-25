@@ -21,7 +21,7 @@ option(USE_CUDA_CV "use CUDA with OpenCV (Requires OpenCV build for CUDA)" OFF)
 option(USE_SIMSEARCH "build index and search services" OFF)
 option(USE_ANNOY "use annoy as indexer" OFF)
 option(USE_FAISS "use FAISS as indexer" ON)
-option(BUILD_SPDLOG "build SPDLOG instead of using system library" OFF)
+option(BUILD_SPDLOG "build SPDLOG instead of using system library" ON)
 option(USE_BOOST_BACKTRACE "use boost backtrace" ON)
 
 if (USE_CAFFE)
@@ -188,13 +188,16 @@ if (BUILD_SPDLOG)
         URL https://github.com/gabime/spdlog/archive/v1.8.2.tar.gz
         URL_HASH SHA256=e20e6bd8f57e866eaf25a5417f0a38a116e537f1a77ac7b5409ca2b180cec0d5
         BUILD_IN_SOURCE true
-        INSTALL_COMMAND ""
+        CMAKE_ARGS -DCMAKE_INSTALL_PREFIX=${CMAKE_BINARY_DIR}/spdlog/build -DCMAKE_POSITION_INDEPENDENT_CODE=ON
     )
-    set(SPDLOG_LIB_DEPS ${CMAKE_BINARY_DIR}/spdlog/src/spdlog/libspdlog.a)
-    set(SPDLOG_CAFFE_LIB_DIR ${CMAKE_BINARY_DIR}/spdlog/src/spdlog)
+    set(SPDLOG_LIB_DEPS ${CMAKE_BINARY_DIR}/spdlog/build/lib/libspdlog.a)
+    set(SPDLOG_LIB_DIR ${CMAKE_BINARY_DIR}/spdlog/build/lib)
     set(SPDLOG_CAFFE_LIB_DEPS :libspdlog.a)
-    set(SPDLOG_INCLUDE_DIR ${CMAKE_BINARY_DIR}/spdlog/src/spdlog/include)
+    set(SPDLOG_INCLUDE_DIR ${CMAKE_BINARY_DIR}/spdlog/build/include)
     include_directories(SYSTEM ${SPDLOG_INCLUDE_DIR})
+else()
+    find_package(spdlog 1.8.2 CONFIG REQUIRED)
+    set(SPDLOG_LIB_DEPS spdlog::spdlog)
 endif()
 
 # hdf5
@@ -628,7 +631,7 @@ elseif(USE_CAFFE)
         echo "INCLUDE_DIRS+=${PROTOBUF_INCLUDE_DIR}" >> Makefile.config &&
         echo "CUDA_ARCH:=${CUDA_ARCH}" >> Makefile.config &&
         echo "LIBRARIES+=${SPDLOG_CAFFE_LIB_DEPS}" >> Makefile.config &&
-        echo "LIBRARY_DIRS+=${SPDLOG_CAFFE_LIB_DIR}" >> Makefile.config &&
+        echo "LIBRARY_DIRS+=${SPDLOG_LIB_DIR}" >> Makefile.config &&
         echo "LIBRARY_DIRS+=${PROTOBUF_LIB_DIR}" >> Makefile.config
     BUILD_COMMAND 
         ${CMAKE_COMMAND} -E env LD_LIBRARY_PATH=${PROTOBUF_LIB_DIR}:$ENV{LD_LIBRARY_PATH} PATH=${PROTOBUF_LIB_DIR}:$ENV{PATH} make -j${N} proto &&
@@ -680,41 +683,43 @@ if (USE_NCNN)
   message(STATUS "Configuring NCNN")
   add_definitions(-DUSE_NCNN)
   include_directories(${CMAKE_CURRENT_BINARY_DIR})
+
   set(NCNN_PATCHES_PATH ${CMAKE_BINARY_DIR}/patches/ncnn)
   set(NCNN_PATCHES
     ${NCNN_PATCHES_PATH}/ncnn_inner_keep_h.patch
     ${NCNN_PATCHES_PATH}/ncnn_lstm_cont.patch
     ${NCNN_PATCHES_PATH}/ncnn_variable_h.patch
     ${NCNN_PATCHES_PATH}/ncnn_flatten_axis.patch
+    ${NCNN_PATCHES_PATH}/ncnn_cont_indic.patch
     )
 
   set(NCNN_VERSION "20201218")
-  set(NCNN_COMPLETE ${CMAKE_BINARY_DIR}/CMakeFiles/ncnn-complete)
+  set(NCNN_TARBALL_HASH "1dac4571168b83ee99efaba969c01e8054cd8e3d9b67ca4893f32b767ab4ec48")
+  set(NCNN_BUILD_FLAGS -DCMAKE_BUILD_TYPE=Release -DNCNN_BUILD_EXAMPLES=OFF -DNCNN_BUILD_BENCHMARK=OFF -DNCNN_BUILD_TOOLS=OFF -DNCNN_BUILD_TESTS=OFF)
 
-  set(NCNN_LIB_DEPS ${CMAKE_BINARY_DIR}/ncnn/src/ncnn-build/src/libncnn.a)
   if (RPI3)
     ExternalProject_Add(
       ncnn
       PREFIX ncnn
-      GIT_REPOSITORY https://github.com/tencent/ncnn.git
-      GIT_TAG ${NCNN_VERSION}
-      PATCH_COMMAND git apply ${NCNN_PATCHES} && echo Applying ${NCNN_PATCHES}
-      CMAKE_ARGS -DPI3=ON -DCMAKE_TOOLCHAIN_FILE=../toolchains/pi3.toolchain.cmake -DCMAKE_BUILD_TYPE=Release -DProtobuf_INCLUDE_DIR=${CMAKE_BINARY_DIR}/protobuf/src/protobuf/src -DProtobuf_LIBRARIES=${PROTOBUF_LIB_DIR}/libprotobuf.so -DProtobuf_PROTOC_EXECUTABLE=${PROTOBUF_LIB_DIR}/protoc -DNCNN_BUILD_EXAMPLES=OFF -DNCNN_BUILD_BENCHMARK=OFF -DNCNN_BUILD_TOOLS=OFF -DNCNN_BUILD_TESTS=OFF
+      URL https://github.com/Tencent/ncnn/releases/download/${NCNN_VERSION}/ncnn-${NCNN_VERSION}-full-source.zip
+      URL_HASH SHA256=${NCNN_TARBALL_HASH}
+      PATCH_COMMAND ${CMAKE_SOURCE_DIR}/cmake/patches-apply.sh ${NCNN_PATCHES}
+      CMAKE_ARGS -DPI3=ON -DCMAKE_TOOLCHAIN_FILE=../toolchains/pi3.toolchain.cmake ${NCNN_BUILD_FLAGS}
       INSTALL_COMMAND ""
-      DEPENDS protobuf
     )
   else ()
     ExternalProject_Add(
       ncnn
       PREFIX ncnn
-      PATCH_COMMAND test -f ${NCNN_COMPLETE} || git apply ${NCNN_PATCHES}
-      GIT_TAG ${NCNN_VERSION}
-      GIT_REPOSITORY https://github.com/tencent/ncnn.git
-      CMAKE_ARGS -DCMAKE_BUILD_TYPE=Release -DProtobuf_INCLUDE_DIR=${CMAKE_BINARY_DIR}/protobuf/src/protobuf/src -DProtobuf_LIBRARIES=${PROTOBUF_LIB_DIR}/libprotobuf.so -DProtobuf_PROTOC_EXECUTABLE=${PROTOBUF_LIB_DIR}/protoc -DNCNN_BUILD_EXAMPLES=OFF -DNCNN_BUILD_BENCHMARK=OFF -DNCNN_BUILD_TOOLS=OFF -DNCNN_BUILD_TESTS=OFF
+      URL https://github.com/Tencent/ncnn/releases/download/${NCNN_VERSION}/ncnn-${NCNN_VERSION}-full-source.zip
+      URL_HASH SHA256=${NCNN_TARBALL_HASH}
+      PATCH_COMMAND ${CMAKE_SOURCE_DIR}/cmake/patches-apply.sh ${NCNN_PATCHES}
+      CMAKE_ARGS ${NCNN_BUILD_FLAGS}
       INSTALL_COMMAND ""
-      DEPENDS protobuf
       )
   endif()
+
+  set(NCNN_LIB_DEPS ${CMAKE_BINARY_DIR}/ncnn/src/ncnn-build/src/libncnn.a)
   set(NCNN_INC_DIR ${CMAKE_BINARY_DIR}/ncnn/src/ncnn/src ${CMAKE_BINARY_DIR}/ncnn/src/ncnn-build/src)
   set(NCNN_LIB_DIR ${CMAKE_BINARY_DIR}/ncnn/src/ncnn-build/src)
   include_directories(${NCNN_INC_DIR})
@@ -761,7 +766,13 @@ if (USE_TORCH)
       PATCH_COMMAND test -f ${PYTORCH_COMPLETE} && echo Skipping || git apply ${PYTORCH_PATCHES} && echo Applying ${PYTORCH_PATCHES}
       CONFIGURE_COMMAND ""
       BUILD_COMMAND ""
-      COMMAND test -f ${PYTORCH_COMPLETE} && echo Skipping || PATH=${PROTOBUF_LIB_DIR}:$ENV{PATH} BUILD_CUSTOM_PROTOBUF=0 GLIBCXX_USE_CXX11_ABI=1 BUILD_TEST=0 USE_CUDA=${PYTORCH_USE_CUDA} BUILD_CAFFE2_OPS=0 USE_DDLOG=1 CAFFE2_LINK_LOCAL_PROTOBUF=0 MAX_JOBS=8 python3 ../pytorch/tools/build_libtorch.py
+      COMMAND test -f ${PYTORCH_COMPLETE} && echo Skipping
+        || PATH=${PROTOBUF_LIB_DIR}:$ENV{PATH}
+        BUILD_CUSTOM_PROTOBUF=0 GLIBCXX_USE_CXX11_ABI=1 BUILD_TEST=0
+        USE_CUDA=${PYTORCH_USE_CUDA}
+        BUILD_CAFFE2_OPS=0 USE_DDLOG=1 CAFFE2_LINK_LOCAL_PROTOBUF=0
+        "CMAKE_CXX_FLAGS=-isystem${SPDLOG_INCLUDE_DIR}"
+        MAX_JOBS=8 python3 ../pytorch/tools/build_libtorch.py
       INSTALL_COMMAND ""
     )
 
@@ -794,7 +805,8 @@ if (USE_TORCH)
     GIT_CONFIG advice.detachedHead=false
     CMAKE_ARGS -DWITH_CUDA=${PYTORCH_USE_CUDA} -DCMAKE_PREFIX_PATH=${TORCH_LOCATION} -DCMAKE_INSTALL_PREFIX=${TORCHVISION_LOCATION}
       -DCMAKE_INCLUDE_PATH=${PROJECT_INCLUDE_DIR} -DCMAKE_LIBRARY_PATH=${PROTOBUF_LIB_DIR}
-      "-DCMAKE_CXX_FLAGS=-isystem ${CMAKE_BINARY_DIR}/pytorch/src/pytorch/" "-DCMAKE_CUDA_FLAGS=-isystem ${CMAKE_BINARY_DIR}/pytorch/src/pytorch/"
+      "-DCMAKE_CXX_FLAGS=-isystem ${CMAKE_BINARY_DIR}/pytorch/src/pytorch/ -isystem ${SPDLOG_INCLUDE_DIR}"
+      "-DCMAKE_CUDA_FLAGS=-isystem ${CMAKE_BINARY_DIR}/pytorch/src/pytorch/ -isystem ${SPDLOG_INCLUDE_DIR}"
       -DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc
     DEPENDS protobuf pytorch
   )
@@ -1043,7 +1055,7 @@ include_directories("${PROJECT_SOURCE_DIR}/src")
 include_directories(${CMAKE_BINARY_DIR}/src)
 add_subdirectory(src)
 
-set(COMMON_INCLUDE_DIRS ${Boost_INCLUDE_DIRS} ${HTTP_INCLUDE_DIR} ${PROTOBUF_INCLUDE_DIR})
+set(COMMON_INCLUDE_DIRS ${Boost_INCLUDE_DIRS} ${HTTP_INCLUDE_DIR} ${PROTOBUF_INCLUDE_DIR} ${SPDLOG_INCLUDE_DIR})
 
 if (CUDA_FOUND)
     list(APPEND COMMON_INCLUDE_DIRS ${CUDA_INCLUDE_DIRS})

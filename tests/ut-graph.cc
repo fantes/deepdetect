@@ -217,7 +217,7 @@ TEST(graphapi, intermediate_lstm_train)
   inputc.transform(ad);
 
   ASSERT_EQ(inputc._dataset.cache_size(), 485);
-  ASSERT_EQ(inputc._test_dataset.cache_size(), 10);
+  ASSERT_EQ(inputc._test_datasets[0].cache_size(), 10);
 
   auto batchoptional
       = inputc._dataset.get_batch({ inputc._dataset.cache_size() });
@@ -774,7 +774,7 @@ TEST(graphapi, complete_extract_layer_gpu)
         + str_min_vals + ",\"max_vals\":" + str_max_vals
         + "},\"output\":{}},\"data\":[\"" + csvts_predict + "\"]}";
   joutstr = japi.jrender(japi.service_predict(jpredictstr));
-  std::cout << "joutstr=" << joutstr << std::endl;
+  // std::cout << "joutstr=" << joutstr << std::endl;
   jd.Parse<rapidjson::kParseNanAndInfFlag>(joutstr.c_str());
   ASSERT_TRUE(!jd.HasParseError());
   ASSERT_EQ(200, jd["status"]["code"]);
