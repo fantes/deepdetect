@@ -22,6 +22,7 @@ option(USE_SIMSEARCH "build index and search services" OFF)
 option(USE_ANNOY "use annoy as indexer" OFF)
 option(USE_FAISS "use FAISS as indexer" ON)
 option(BUILD_SPDLOG "build SPDLOG instead of using system library" ON)
+option(BUILD_PROTOBUF "build PROTOBUF instead of using system library" ON)
 option(USE_BOOST_BACKTRACE "use boost backtrace" ON)
 
 if (USE_CAFFE)
@@ -56,7 +57,7 @@ OPTION(BUILD_TESTS "Should the tests be built")
 OPTION(BUILD_TOOLS "Should the tools be built")
 OPTION(USE_COMMAND_LINE "build command line JSON API" ON)
 OPTION(USE_JSON_API "build internal JSON API" ON)
-OPTION(USE_HTTP_SERVER "build cppnet-lib version of http JSON API " ON)
+OPTION(USE_HTTP_SERVER "build cppnet-lib version of http JSON API " OFF)
 OPTION(USE_HTTP_SERVER_OATPP "build oatpp version of http JSON API" ON)
 
 # Get the current working branch
@@ -123,26 +124,40 @@ endif()
 # PROTOBUF
 
 # use protobuf same version as pytorch one
-set(PROTOBUF_VERSION 3.11.4)
-ExternalProject_Add(
-   protobuf
-   PREFIX protobuf
-   URL https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOBUF_VERSION}/protobuf-cpp-${PROTOBUF_VERSION}.tar.gz
-   URL_HASH SHA256=ba4bbc3e6b58d2ccfe406e616576ef48710a2aae205f463618025fc691549cfe
-   SOURCE_SUBDIR cmake
-   CMAKE_ARGS
-    -DCMAKE_BUILD_TYPE=$CMAKE_BUILD_TYPE
-    -DCMAKE_POSITION_INDEPENDENT_CODE:BOOL=ON
-    -DBUILD_SHARED_LIBS:BOOL=ON
-    -Dprotobuf_BUILD_TESTS:BOOL=OFF
-    -Dprotobuf_BUILD_EXAMPLES:BOOL=OFF
-   INSTALL_COMMAND ""
-)
-set(PROTOBUF_INCLUDE_DIR ${CMAKE_BINARY_DIR}/protobuf/src/protobuf/src)
-set(PROTOBUF_LIB_DIR ${CMAKE_BINARY_DIR}/protobuf/src/protobuf-build/)
-set(PROTOBUF_LIB_DEPS ${PROTOBUF_LIB_DIR}/libprotobuf.so ${PROTOBUF_LIB_DIR}/libprotoc.so ${PROTOBUF_LIB_DIR}/libprotobuf-lite.so)
-link_directories(${PROTOBUF_LIB_DIR})
-include_directories(SYSTEM ${PROTOBUF_INCLUDE_DIR})
+if (BUILD_PROTOBUF)
+    set(PROTOBUF_VERSION 3.11.4)
+    ExternalProject_Add(
+        protobuf
+        PREFIX protobuf
+        URL https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOBUF_VERSION}/protobuf-cpp-${PROTOBUF_VERSION}.tar.gz
+        URL_HASH SHA256=ba4bbc3e6b58d2ccfe406e616576ef48710a2aae205f463618025fc691549cfe
+        SOURCE_SUBDIR cmake
+        CMAKE_ARGS
+        -DCMAKE_BUILD_TYPE=$CMAKE_BUILD_TYPE
+        -DCMAKE_POSITION_INDEPENDENT_CODE:BOOL=ON
+        -DBUILD_SHARED_LIBS:BOOL=ON
+        -Dprotobuf_BUILD_TESTS:BOOL=OFF
+        -Dprotobuf_BUILD_EXAMPLES:BOOL=OFF
+        INSTALL_COMMAND ""
+    )
+    set(PROTOBUF_INCLUDE_DIR ${CMAKE_BINARY_DIR}/protobuf/src/protobuf/src)
+    set(PROTOBUF_LIB_DIR ${CMAKE_BINARY_DIR}/protobuf/src/protobuf-build/)
+    set(PROTOBUF_PROTOC ${PROTOBUF_LIB_DIR}/protoc)
+    set(PROTOBUF_LIB_DEPS ${PROTOBUF_LIB_DIR}/libprotobuf.so ${PROTOBUF_LIB_DIR}/libprotoc.so ${PROTOBUF_LIB_DIR}/libprotobuf-lite.so)
+    link_directories(${PROTOBUF_LIB_DIR})
+    include_directories(SYSTEM ${PROTOBUF_INCLUDE_DIR})
+else()
+    if (USE_CAFFE OR USE_TORCH)
+        find_package(Protobuf REQUIRED 3.11.4)
+    else()
+        find_package(Protobuf REQUIRED)
+    endif()
+
+    set(PROTOBUF_PROTOC ${Protobuf_PROTOC_EXECUTABLE})
+    set(PROTOBUF_INCLUDE_DIR ${Protobuf_INCLUDE_DIRS})
+    set(PROTOBUF_LIB_DEPS protobuf::libprotobuf)
+    add_custom_target(protobuf)
+endif()
 
 file(
     DOWNLOAD https://raw.githubusercontent.com/jolibrain/caffe/master/src/caffe/proto/caffe.proto ${CMAKE_BINARY_DIR}/caffe.proto
@@ -150,7 +165,7 @@ file(
 )
 add_custom_command(
     OUTPUT ${CMAKE_BINARY_DIR}/src/caffe.pb.h ${CMAKE_BINARY_DIR}/src/caffe.pb.cc
-    COMMAND LD_LIBRARY_PATH=${PROTOBUF_LIB_DIR} ${PROTOBUF_LIB_DIR}/protoc --proto_path=${CMAKE_BINARY_DIR} --cpp_out=${CMAKE_BINARY_DIR}/src ${CMAKE_BINARY_DIR}/caffe.proto
+    COMMAND LD_LIBRARY_PATH=${PROTOBUF_LIB_DIR} ${PROTOBUF_PROTOC} --proto_path=${CMAKE_BINARY_DIR} --cpp_out=${CMAKE_BINARY_DIR}/src ${CMAKE_BINARY_DIR}/caffe.proto
     MAIN_DEPENDENCY ${CMAKE_BINARY_DIR}/caffe.proto
     COMMENT Generating caffe.pb.h and caffe.pb.cc
     WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
@@ -555,12 +570,12 @@ if (USE_TF)
 endif() # USE_TF
 
 # OpenCV
-find_package(OpenCV 3 QUIET)
+find_package(OpenCV 3 QUIET COMPONENTS core imgproc highgui imgcodecs)
 if (NOT OpenCV_FOUND)
-  find_package(OpenCV 4 QUIET)
+  find_package(OpenCV 4 QUIET COMPONENTS core imgproc highgui imgcodecs)
 endif()
 if (NOT OpenCV_FOUND)
-  find_package(OpenCV 2 REQUIRED)
+  find_package(OpenCV 2 REQUIRED COMPONENTS core imgproc highgui imgcodecs)
 endif()
 set(OPENCV_VERSION ${OpenCV_VERSION_MAJOR})
 include_directories(${OpenCV_INCLUDE_DIRS})
@@ -921,8 +936,11 @@ if (USE_TENSORRT)
         if (EXISTS "${TRTTESTDIR}/libnvinfer.so.7.1.3")
             set(TENSORRT_VERSION 20.09)
             message(STATUS "Found TensorRT libraries version 7.1.3")
+        # TODO(sileht): Update trt-oss patches for 7.2.2
+        # elseif (EXISTS "${TRTTESTDIR}/libnvinfer.so.7.2.2")
+        #     set(TENSORRT_VERSION 20.12)
+        #     message(STATUS "Found TensorRT libraries version 7.2.2")
         elseif (EXISTS "${TRTTESTDIR}/libnvinfer.so.7")
-            # FIXME(sileht): remove this case when eris/ceres have been updated
             set(TENSORRT_VERSION 20.09)
             message(WARNING "No supported TensorRT version found assuming 20.09/7.1.3")
         else()
@@ -1154,6 +1172,7 @@ message(STATUS "USE_JSON_API:          ${USE_JSON_API}")
 message(STATUS "USE_HTTP_SERVER:       ${USE_HTTP_SERVER}")
 message(STATUS "USE_HTTP_SERVER_OATPP: ${USE_HTTP_SERVER_OATPP}")
 message(STATUS "BUILD_SPDLOG:          ${BUILD_SPDLOG}")
+message(STATUS "BUILD_PROTOBUF:        ${BUILD_PROTOBUF}")
 message(STATUS "BUILD_TESTS:           ${BUILD_TESTS}")
 message(STATUS "BUILD_TOOLS:           ${BUILD_TOOLS}")
 message(STATUS "USE_CAFFE:             ${USE_CAFFE}")
