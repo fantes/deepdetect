@@ -22,6 +22,8 @@
 #include "ttransformer.h"
 #include <math.h>
 
+using namespace torch::indexing;
+
 namespace dd
 {
 
@@ -32,17 +34,6 @@ namespace dd
                   std::to_string(_embed_type), std::to_string(_embed_dim),
                   std::to_string(_embed_nlayers),
                   std::to_string(_embed_dropout));
-    _embedder = register_module("embedder",
-                                Embedder(_input_dim, _input_len, _embed_type,
-                                         _embed_activation, _embed_dim,
-                                         _embed_nlayers, _embed_dropout));
-
-    _logger->info("pe type: {}  dropout: {}   learn: {} ",
-                  std::to_string(_petype), std::to_string(_pe_dropout),
-                  std::to_string(_embed_dropout), std::to_string(_pelearn));
-    _pe = register_module("pe",
-                          PositionalEncoding(_input_len, _embed_dim, _petype,
-                                             _pe_dropout, _pelearn));
 
     if (_peagg == PEAggregation::sum)
       _logger->info("using classical (sum) pe aggregation");
@@ -51,22 +42,34 @@ namespace dd
     else
       throw MLLibBadParamException("unkown pe agg");
 
+    if (_peagg == PEAggregation::sum)
+      {
+        _embedder = register_module(
+            "embedder",
+            Embedder(_input_dim, _input_len, _embed_type, _embed_activation,
+                     _embed_dim, _embed_nlayers, _embed_dropout));
+      }
+    else
+      _embedder = register_module("embedder",
+                                  Embedder(_input_dim, _input_len, _embed_type,
+                                           _embed_activation, _embed_dim - 1,
+                                           _embed_nlayers, _embed_dropout));
+
+    _logger->info("pe type: {}  dropout: {}   learn: {} ",
+                  std::to_string(_petype), std::to_string(_pe_dropout),
+                  std::to_string(_embed_dropout), std::to_string(_pelearn));
+    _pe = register_module("pe",
+                          PositionalEncoding(_input_len, _embed_dim, _petype,
+                                             _pe_dropout, _pelearn));
+
     _logger->info(
         "encoder nheads: {}  nlayers: {}  hidden_dim: {}  dropout: {}",
         std::to_string(_encoder_nheads), std::to_string(_encoder_nlayers),
         std::to_string(_encoder_hidden_dim), std::to_string(_encoder_dropout));
-    if (_peagg == PEAggregation::sum)
-      _encoder = register_module(
-          "TEncoder", TEncoder(_input_len, _embed_dim, _encoder_nheads,
-                               _encoder_nlayers, _encoder_hidden_dim,
-                               _encoder_dropout, _encoder_activation));
-    else if (_peagg == PEAggregation::cat)
-      _encoder = register_module(
-          "TEncoder", TEncoder(_input_len, _embed_dim * 2, _encoder_nheads,
-                               _encoder_nlayers, _encoder_hidden_dim,
-                               _encoder_dropout, _encoder_activation));
-    else
-      throw MLLibBadParamException("unknow pe aggregation type");
+    _encoder = register_module(
+        "TEncoder",
+        TEncoder(_input_len, _embed_dim, _encoder_nheads, _encoder_nlayers,
+                 _encoder_hidden_dim, _encoder_dropout, _encoder_activation));
 
     if (_simple_decoder)
       _logger->info("decoder mlp: nlayers: {}  hidden_dim: {}  dropout: {}",
@@ -81,18 +84,11 @@ namespace dd
           std::to_string(_decoder_nlayers),
           std::to_string(_decoder_hidden_dim),
           std::to_string(_encoder_dropout));
-    if (_peagg == PEAggregation::sum)
-      _decoder = register_module(
-          "TDecoder", TDecoder(_simple_decoder, _embed_dim, _input_len,
-                               _output_dim, _output_len, _decoder_nheads,
-                               _decoder_nlayers, _decoder_hidden_dim,
-                               _decoder_dropout, _decoder_activation));
-    else if (_peagg == PEAggregation::cat)
-      _decoder = register_module(
-          "TDecoder", TDecoder(_simple_decoder, _embed_dim * 2, _input_len,
-                               _output_dim, _output_len, _decoder_nheads,
-                               _decoder_nlayers, _decoder_hidden_dim,
-                               _decoder_dropout, _decoder_activation));
+    _decoder = register_module(
+        "TDecoder",
+        TDecoder(_simple_decoder, _embed_dim, _input_len, _output_dim,
+                 _output_len, _decoder_nheads, _decoder_nlayers,
+                 _decoder_hidden_dim, _decoder_dropout, _decoder_activation));
 
     if (!_autoreg)
       _encoder_mask
@@ -144,7 +140,11 @@ namespace dd
         if (_peagg == PEAggregation::sum)
           x = x + _pe();
         else if (_peagg == PEAggregation::cat)
-          x = torch::cat({ x, _pe().repeat({ x.size(0), 1, 1 }) }, -1);
+          {
+            torch::Tensor pe
+                = _pe().index({ Slice(), Slice(), 0 }).unsqueeze(-1);
+            x = torch::cat({ x, pe.repeat({ x.size(0), 1, 1 }) }, -1);
+          }
         out = _encoder(x, _encoder_mask);
         out = _decoder->forward(out, _decoder_mask);
         out = out.reshape({ -1, _output_len, _output_dim });

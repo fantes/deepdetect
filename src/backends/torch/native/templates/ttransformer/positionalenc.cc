@@ -35,10 +35,9 @@ namespace dd
     torch::Tensor pet;
     if (_et == PEType::naive)
       {
-        pet = torch::arange(0, _seq_len * _datadim,
-                            torch::TensorOptions(torch::kFloat32))
-                  .reshape({ _seq_len, _datadim });
-        pet = (pet / (float)(_seq_len * _datadim)) * 2.0 - 1.0;
+        pet = torch::arange(0, _seq_len, torch::TensorOptions(torch::kFloat32))
+                  .unsqueeze(1)
+                  .expand({ _seq_len, _datadim });
       }
     else if (_et == PEType::none)
       {
