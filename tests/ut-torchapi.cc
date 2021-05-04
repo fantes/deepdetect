@@ -143,6 +143,42 @@ TEST(torchapi, service_predict)
   ASSERT_EQ(jd["body"]["predictions"][0]["classes"].Size(), 8);
 }
 
+TEST(torchapi, service_predict_native_bw)
+{
+  // Predict greyscale image with native model should work
+  std::string native_resnet_repo = "native_resnet";
+
+  JsonAPI japi;
+  std::string sname = "imgserv";
+  std::string jstr
+      = "{\"mllib\":\"torch\",\"description\":\"image\",\"type\":"
+        "\"supervised\",\"model\":{\"repository\":\""
+        + native_resnet_repo
+        + "\",\"create_repository\":true},\"parameters\":{\"input\":{"
+          "\"connector\":\"image\",\"bw\":true,"
+          "\"width\":224,\"height\":224,\"db\":true},"
+          "\"mllib\":{\"nclasses\":2,\"gpu\":true,\"template\":\"resnet50\"}}"
+          "}";
+  std::string joutstr = japi.jrender(japi.service_create(sname, jstr));
+
+  std::string jpredictstr
+      = "{\"service\":\"imgserv\",\"parameters\":{\"input\":{\"height\":224,"
+        "\"width\":224},\"output\":{\"best\":1}},\"data\":[\""
+        + incept_repo + "cat.jpg\"]}";
+  joutstr = japi.jrender(japi.service_predict(jpredictstr));
+  JDoc jd;
+  std::cout << "joutstr=" << joutstr << std::endl;
+  jd.Parse<rapidjson::kParseNanAndInfFlag>(joutstr.c_str());
+  ASSERT_TRUE(!jd.HasParseError());
+  ASSERT_EQ(200, jd["status"]["code"]);
+
+  // clear directory
+  jstr = "{\"clear\":\"full\"}";
+  joutstr = japi.jrender(japi.service_delete(sname, jstr));
+  ASSERT_EQ(ok_str, joutstr);
+  fileops::remove_dir(native_resnet_repo);
+}
+
 #if !defined(CPU_ONLY)
 TEST(torchapi, service_predict_fp16)
 {
@@ -554,8 +590,9 @@ TEST(torchapi, service_train_images)
         + ",\"iter_size\":4,\"solver_type\":\"ADAM\",\"test_"
           "interval\":200},\"net\":{\"batch_size\":4},"
           "\"resume\":false,\"mirror\":true,\"rotate\":true,\"crop_size\":224,"
-          "\"cutout\":0.5}"
-          ","
+          "\"cutout\":0.5,\"geometry\":{\"prob\":0.1,\"persp_horizontal\":"
+          "true,\"persp_vertical\":true,\"zoom_in\":true,\"zoom_out\":true,"
+          "\"pad_mode\":1}},"
           "\"input\":{\"seed\":12345,\"db\":true,\"shuffle\":true},"
           "\"output\":{\"measure\":[\"f1\",\"acc\"]}},\"data\":[\""
         + resnet50_train_data + "\",\"" + resnet50_test_data + "\"]}";
