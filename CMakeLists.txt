@@ -292,7 +292,7 @@ if (NOT CUDA_FOUND)
 endif()
 
 # annoy
-if (USE_CAFFE)
+if (USE_CAFFE OR USE_TORCH)
   if (USE_SIMSEARCH)
     if (USE_FAISS AND USE_ANNOY)
       message (STATUS "ANNOY selected, using ANNOY as simsearch backend")
@@ -321,14 +321,9 @@ if (USE_CAFFE)
     endif()
     if(USE_FAISS)
       if (USE_FAISS_CPU_ONLY)
-        set(CONFIGURE_OPTS "--without-cuda")
+	set(CONFIGURE_OPTS "-DFAISS_ENABLE_GPU=OFF")
       else()
-        string(REPLACE "/include" "" CUDA_PREFIX ${CUDA_INCLUDE_DIRS})
-        if (NOT CUDA_ARCH)
-          string(REPLACE ";" " " CUDA_ARCH "${CUDA_NVCC_FLAGS}")
-        endif()
-        set(CONFIGURE_OPTS --with-cuda=${CUDA_PREFIX} --with-cuda-arch=${CUDA_ARCH})
-        add_definitions(-DUSE_GPU_FAISS)
+        set(CONFIGURE_OPTS "-DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc")
       endif()
       message(STATUS "Fetching FAISS")
       add_definitions(-DUSE_FAISS)
@@ -337,15 +332,16 @@ if (USE_CAFFE)
         faisslib
         PREFIX faiss
         SOURCE_DIR ${CMAKE_BINARY_DIR}/faiss/src/faiss
-        GIT_REPOSITORY https://github.com/jolibrain/faiss
-        CONFIGURE_COMMAND ./configure ${CONFIGURE_OPTS}
+        GIT_REPOSITORY https://github.com/facebookresearch/faiss
+        CONFIGURE_COMMAND cmake ${CONFIGURE_OPTS} -B build .
+	BUILD_COMMAND make -C build -j${N}
         INSTALL_COMMAND ""
         BUILD_IN_SOURCE 1
       )
 
-      set(FAISS_INCLUDE_DIR ${CMAKE_BINARY_DIR}/faiss/src/)
+      set(FAISS_INCLUDE_DIR ${CMAKE_BINARY_DIR}/faiss/src/faiss)
       include_directories("${FAISS_INCLUDE_DIR}")
-      set(FAISS_LIB_DIR ${CMAKE_BINARY_DIR}/faiss/src/faiss)
+      set(FAISS_LIB_DIR ${CMAKE_BINARY_DIR}/faiss/src/faiss/build/faiss)
       set(FAISS_LIB_DEPS faiss)
     endif()
   endif()
@@ -968,7 +964,10 @@ if (USE_TENSORRT)
     endif()
 
 	set(TRT_PATCHES_PATH ${CMAKE_BINARY_DIR}/patches/trt)
-	set(TRT_PATCHES ${TRT_PATCHES_PATH}/0001-support-for-refinedet.patch)
+	set(TRT_PATCHES
+      ${TRT_PATCHES_PATH}/0001-support-for-refinedet.patch
+      ${TRT_PATCHES_PATH}/0003-c++14.patch
+      )
 
     # Tensorrt uses its own protobuf version (3.0.0) and this cannot be overrided
     # At best we can set the version it will internally build
