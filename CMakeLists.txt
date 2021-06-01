@@ -89,7 +89,8 @@ if (NOT EXISTS ${CMAKE_BINARY_DIR}/src)
 	COMMAND  bash -c "mkdir ${CMAKE_BINARY_DIR}/src")
 endif()
 
-set(CMAKE_CXX_FLAGS "-g -O2 -Wall -Wextra -fopenmp -fPIC -std=c++14 -DUSE_OPENCV -DUSE_LMDB  -Wl,--no-as-needed -ltcmalloc_minimal")
+set(CMAKE_CXX_FLAGS "-g -O2 -Wall -Wextra -fopenmp -fPIC -std=c++14 -Wl,--no-as-needed -ltcmalloc_minimal")
+add_definitions("-DUSE_OPENCV" "-DUSE_LMDB")
 
 if(WARNING)
   string(APPEND CMAKE_CXX_FLAGS " -Werror")
@@ -693,7 +694,6 @@ endif()
 if (USE_NCNN)
   message(STATUS "Configuring NCNN")
   add_definitions(-DUSE_NCNN)
-  include_directories(${CMAKE_CURRENT_BINARY_DIR})
 
   set(NCNN_PATCHES_PATH ${CMAKE_BINARY_DIR}/patches/ncnn)
   set(NCNN_PATCHES
@@ -733,7 +733,6 @@ if (USE_NCNN)
   set(NCNN_LIB_DEPS ${CMAKE_BINARY_DIR}/ncnn/src/ncnn-build/src/libncnn.a)
   set(NCNN_INC_DIR ${CMAKE_BINARY_DIR}/ncnn/src/ncnn/src ${CMAKE_BINARY_DIR}/ncnn/src/ncnn-build/src)
   set(NCNN_LIB_DIR ${CMAKE_BINARY_DIR}/ncnn/src/ncnn-build/src)
-  include_directories(${NCNN_INC_DIR})
 endif()
 
 # Torch
@@ -755,11 +754,7 @@ if (USE_TORCH)
   add_definitions(-DUSE_TORCH)
 
   if (NOT TORCH_LOCATION)
-    #set(PYTORCH_COMMIT ee77ccbb6da4e2efd83673e798acf7081bc03564) # 1.3.1
-    #set(PYTORCH_COMMIT 7f73f1d591afba823daa4a99a939217fb54d7688) # 1.4
-    #set(PYTORCH_COMMIT 4ff3872a2099993bf7e8c588f7182f3df777205b)  # 1.5
-	#set(PYTORCH_COMMIT b31f58de6fa8bbda5353b3c77d9be4914399724d)  # 1.6
-    set(PYTORCH_COMMIT v1.8.0)
+    set(PYTORCH_COMMIT v1.8.1)
     set(PYTORCH_COMPLETE ${CMAKE_BINARY_DIR}/CMakeFiles/pytorch-complete)
 
     if(USE_TORCH_CPU_ONLY)
@@ -798,10 +793,7 @@ if (USE_TORCH)
 
   # TORCH VISION
   message(STATUS "Configuring Pytorch Vision")
-  # set(PYTORCH_VISION_COMMIT "v0.6.0") # 0.6 & torch 1.5
-  #set(PYTORCH_VISION_COMMIT "v0.7.0") # 0.7 & torch 1.6
-  #set(PYTORCH_VISION_COMMIT "v0.8.2") # 0.8.2 & torch 1.7.1
-  set(PYTORCH_VISION_COMMIT "v0.9.0") # 0.9.0 & torch 1.8
+  set(PYTORCH_VISION_COMMIT "v0.9.1") # 0.9.1 & torch 1.8.1
   set(PYTORCH_VISION_PATCHES_PATH ${CMAKE_BINARY_DIR}/patches/pytorch/vision)
   set(PYTORCH_VISION_PATCHES
       ${PYTORCH_VISION_PATCHES_PATH}/pytorch_vision_09_fasterrcnn.patch
@@ -899,12 +891,6 @@ if (USE_TSNE)
   set(TSNE_LIB_DIR ${CMAKE_BINARY_DIR}/Multicore-TSNE/src/Multicore-TSNE-build)
 endif()
 
-# add the binary tree to the search path for include files
-# so that we will find dd_config.h
-include_directories("${PROJECT_BINARY_DIR}")
-include_directories(${CAFFE_INC_DIR} ${XGBOOST_INC_DIR} ${TSNE_INC_DIR} ${TORCH_INC_DIR})
-include_directories(${CMAKE_SOURCE_DIR}/src/backends/caffe ${CMAKE_SOURCE_DIR}/backends/xgb ${CMAKE_SOURCE_DIR}/backends/tf ${CMAKE_SOURCE_DIR}/backends/dlib ${CMAKE_SOURCE_DIR}/backends/tsne)
-
 if (USE_TENSORRT)
   add_definitions(-DUSE_TENSORRT)
   if (EXISTS ${TENSORRT_DIR}/libprotobuf.a)
@@ -934,7 +920,6 @@ if (USE_TENSORRT)
   endif()
 
     set(TENSORRT_LIB_DIR ${CMAKE_BINARY_DIR}/tensorrt-oss/bin/ ${TENSORRT_LIB_DIR})
-    include_directories(${CMAKE_CURRENT_BINARY_DIR})
 	set(TENSORRT_LIBS /usr/lib/x86_64-linux-gnu/libnvinfer.so.7 nvcaffeparser nvinfer_plugin nvonnxparser )
 
     if (NOT TENSORRT_VERSION)
@@ -975,20 +960,20 @@ if (USE_TENSORRT)
 
     # Tensorrt uses its own protobuf version (3.0.0) and this cannot be overrided
     # At best we can set the version it will internally build
+    set(TENSORRT_COMPLETE ${CMAKE_BINARY_DIR}/CMakeFiles/tensorrt-oss-complete)
     ExternalProject_Add(
       tensorrt-oss
       PREFIX tensorrt-oss
       GIT_REPOSITORY https://github.com/NVIDIA/TensorRT.git
       GIT_TAG ${TENSORRT_VERSION}
       GIT_CONFIG advice.detachedHead=false
-	  PATCH_COMMAND git reset --hard && git submodule foreach --recursive git reset --hard && git apply ${TRT_PATCHES}
-      CMAKE_ARGS ${TRT_FLAGS}
+      PATCH_COMMAND git reset --hard && git submodule foreach --recursive git reset --hard && git apply ${TRT_PATCHES}
+      BUILD_COMMAND test -f ${TENSORRT_COMPLETE} || cmake ${TRT_FLAGS}
       INSTALL_COMMAND ""
     )
 
     # Use our tensorrt-oss header versions first
     include_directories(SYSTEM ${CMAKE_BINARY_DIR}/tensorrt-oss/src/tensorrt-oss/include)
-    include_directories(${TENSORRT_INC_DIR})
 endif()
 
 if (USE_HTTP_SERVER_OATPP)
@@ -1075,10 +1060,48 @@ endif()
 
 # main library, main & tests
 include_directories("${PROJECT_SOURCE_DIR}/src")
+# add the binary tree to the search path for include files
+# so that we will find dd_config.h
+include_directories("${PROJECT_BINARY_DIR}")
+# caffe.pb.h, ...
 include_directories(${CMAKE_BINARY_DIR}/src)
+
+include_directories(
+    ${CAFFE_INC_DIR}
+    ${XGBOOST_INC_DIR}
+    ${TSNE_INC_DIR}
+    ${TORCH_INC_DIR}
+    ${TENSORRT_INC_DIR}
+    ${NCNN_INC_DIR}
+)
+include_directories(
+    ${CMAKE_SOURCE_DIR}/src/backends/caffe
+    ${CMAKE_SOURCE_DIR}/backends/xgb
+    ${CMAKE_SOURCE_DIR}/backends/tf
+    ${CMAKE_SOURCE_DIR}/backends/dlib
+    ${CMAKE_SOURCE_DIR}/backends/tsne
+)
+
 add_subdirectory(src)
 
-set(COMMON_INCLUDE_DIRS ${Boost_INCLUDE_DIRS} ${HTTP_INCLUDE_DIR} ${PROTOBUF_INCLUDE_DIR} ${SPDLOG_INCLUDE_DIR})
+set(COMMON_INCLUDE_DIRS
+    ${Boost_INCLUDE_DIRS}
+    ${HTTP_INCLUDE_DIR}
+    ${PROTOBUF_INCLUDE_DIR}
+    ${SPDLOG_INCLUDE_DIR}
+    ${CAFFE_INC_DIR}
+    ${XGBOOST_INC_DIR}
+    ${TSNE_INC_DIR}
+    ${TORCH_INC_DIR}
+    ${TENSORRT_INC_DIR}
+    ${NCNN_INC_DIR}
+
+    ${CMAKE_SOURCE_DIR}/src/backends/caffe
+    ${CMAKE_SOURCE_DIR}/backends/xgb
+    ${CMAKE_SOURCE_DIR}/backends/tf
+    ${CMAKE_SOURCE_DIR}/backends/dlib
+    ${CMAKE_SOURCE_DIR}/backends/tsne
+)
 
 if (CUDA_FOUND)
     list(APPEND COMMON_INCLUDE_DIRS ${CUDA_INCLUDE_DIRS})
@@ -1117,6 +1140,8 @@ if (USE_HDF5)
 endif()
 
 # configure config.cmake for external application
+get_directory_property(COMMON_DEFINITIONS COMPILE_DEFINITIONS)
+
 configure_file(
     ${CMAKE_CURRENT_SOURCE_DIR}/cmake/DeepDetectConfig.cmake.in
     ${CMAKE_BINARY_DIR}/DeepDetectConfig.cmake
