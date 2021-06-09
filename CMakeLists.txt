@@ -1039,6 +1039,11 @@ if (USE_HTTP_SERVER_OATPP)
         SYSTEM ${CMAKE_BINARY_DIR}/oatpp-zlib/src/oatpp-zlib/src
         SYSTEM ${CMAKE_BINARY_DIR}/oatpp-swagger/src/oatpp-swagger/src
     )
+    set(OATPP_INCLUDE_DIRS
+        ${CMAKE_BINARY_DIR}/oatpp/src/oatpp/src
+        ${CMAKE_BINARY_DIR}/oatpp-zlib/src/oatpp-zlib/src
+        ${CMAKE_BINARY_DIR}/oatpp-swagger/src/oatpp-swagger/src
+    )
 endif()
 
 if (USE_HTTP_SERVER)
@@ -1087,6 +1092,7 @@ add_subdirectory(src)
 
 set(COMMON_INCLUDE_DIRS
     ${Boost_INCLUDE_DIRS}
+    ${OATPP_INCLUDE_DIRS}
     ${HTTP_INCLUDE_DIR}
     ${PROTOBUF_INCLUDE_DIR}
     ${SPDLOG_INCLUDE_DIR}

@@ -633,6 +633,9 @@ namespace dd
             = TorchImgRandAugCV(has_mirror, has_rotate, crop_params,
                                 cutout_params, geometry_params);
       }
+    int dataloader_threads = 1;
+    if (ad_mllib.has("dataloader_threads"))
+      dataloader_threads = ad_mllib.get("dataloader_threads").get<int>();
 
     Tensor class_weights = {};
 
@@ -764,8 +767,13 @@ namespace dd
 
     // create dataloader
     inputc._dataset.reset();
+    size_t dataloader_max_jobs = 2 * iter_size * gpu_count;
+    this->_logger->info("Init dataloader with {} threads and {} prefetch size",
+                        dataloader_threads, dataloader_max_jobs);
     auto dataloader = torch::data::make_data_loader(
-        inputc._dataset, data::DataLoaderOptions(batch_size));
+        inputc._dataset, data::DataLoaderOptions(batch_size)
+                             .workers(dataloader_threads)
+                             .max_jobs(dataloader_max_jobs));
 
     int batch_id = 0;
     double last_it_time = 0;
@@ -792,14 +800,14 @@ namespace dd
 
         for (size_t rank = 0; rank < _devices.size(); ++rank)
           {
+            batches.push_back(*data_it);
+            ++data_it;
+
             if (data_it == dataloader->end())
               {
                 // +1 epoch
                 data_it = dataloader->begin();
               }
-
-            batches.push_back(*data_it);
-            ++data_it;
 
             if (_masked_lm)
               {
@@ -1542,6 +1550,22 @@ namespace dd
         unsupo.finalize(output_params, out,
                         static_cast<MLModel *>(&this->_mlmodel));
       }
+
+    if (ad.has("chain") && ad.get("chain").get<bool>())
+      {
+        if (typeid(inputc) == typeid(ImgTorchInputFileConn))
+          {
+            auto *img_ic = reinterpret_cast<ImgTorchInputFileConn *>(&inputc);
+            APIData chain_input;
+            if (!img_ic->_orig_images.empty())
+              chain_input.add("imgs", img_ic->_orig_images);
+            else
+              chain_input.add("imgs", img_ic->_images);
+            chain_input.add("imgs_size", img_ic->_images_size);
+            out.add("input", chain_input);
+          }
+      }
+
     out.add("status", 0);
     return 0;
   }
