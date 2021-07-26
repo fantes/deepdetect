@@ -744,17 +744,15 @@ if (USE_TORCH)
 
   set(PYTORCH_PATCHES
     ${PYTORCH_PATCHES_PATH}/pytorch_15_compile.patch
-    ${PYTORCH_PATCHES_PATH}/pytorch_16_new_logger.patch
-    ${PYTORCH_PATCHES_PATH}/pytorch_16_use_new_logger.patch
-    ${PYTORCH_PATCHES_PATH}/pytorch_14_namespace.patch
-    ${PYTORCH_PATCHES_PATH}/pytorch_18_string_view.patch
+    ${PYTORCH_PATCHES_PATH}/pytorch_19_new_logger.patch
+    ${PYTORCH_PATCHES_PATH}/pytorch_19_use_new_logger.patch
   )
 
   message(STATUS "Configuring libtorch")
   add_definitions(-DUSE_TORCH)
 
   if (NOT TORCH_LOCATION)
-    set(PYTORCH_COMMIT v1.8.1)
+    set(PYTORCH_COMMIT v1.9.0)
     set(PYTORCH_COMPLETE ${CMAKE_BINARY_DIR}/CMakeFiles/pytorch-complete)
 
     if(USE_TORCH_CPU_ONLY)
@@ -770,7 +768,7 @@ if (USE_TORCH)
       GIT_TAG ${PYTORCH_COMMIT}
       GIT_CONFIG advice.detachedHead=false
       UPDATE_DISCONNECTED 1
-      PATCH_COMMAND test -f ${PYTORCH_COMPLETE} && echo Skipping || git apply ${PYTORCH_PATCHES} && echo Applying ${PYTORCH_PATCHES}
+      PATCH_COMMAND "" test -f ${PYTORCH_COMPLETE} && echo Skipping || git apply ${PYTORCH_PATCHES} && echo Applying ${PYTORCH_PATCHES}
       CONFIGURE_COMMAND ""
       BUILD_COMMAND ""
       COMMAND test -f ${PYTORCH_COMPLETE} && echo Skipping || ${CMAKE_COMMAND} -E env PATH=${PROTOBUF_LIB_DIR}:$ENV{PATH} BUILD_CUSTOM_PROTOBUF=0 GLIBCXX_USE_CXX11_ABI=1 BUILD_TEST=0 USE_CUDA=${PYTORCH_USE_CUDA} BUILD_CAFFE2_OPS=0 USE_DDLOG=1 CAFFE2_LINK_LOCAL_PROTOBUF=0 "CMAKE_CXX_FLAGS=-isystem${SPDLOG_INCLUDE_DIR} -isystem${PROTOBUF_INCLUDE_DIR}" CMAKE_PREFIX_PATH=${PROTOBUF_LIB_DIR}/cmake MAX_JOBS=8 python3 ../pytorch/tools/build_libtorch.py
@@ -793,28 +791,33 @@ if (USE_TORCH)
 
   # TORCH VISION
   message(STATUS "Configuring Pytorch Vision")
-  set(PYTORCH_VISION_COMMIT "v0.9.1") # 0.9.1 & torch 1.8.1
+  set(PYTORCH_VISION_COMMIT "v0.10.0") # 0.10.0 & torch 1.9.0
   set(PYTORCH_VISION_PATCHES_PATH ${CMAKE_BINARY_DIR}/patches/pytorch/vision)
-  set(PYTORCH_VISION_PATCHES
-      ${PYTORCH_VISION_PATCHES_PATH}/pytorch_vision_09_fasterrcnn.patch
-  )
+  #set(PYTORCH_VISION_PATCHES
+  #    ${PYTORCH_VISION_PATCHES_PATH}/xxx.patch # add patches here
+  #)
 
   set(PYTORCH_VISION_COMPLETE ${CMAKE_BINARY_DIR}/CMakeFiles/pytorch_vision-complete)
   set(TORCHVISION_LOCATION "${CMAKE_BINARY_DIR}/pytorch_vision/src/pytorch_vision-install")
-  ExternalProject_Add(
-    pytorch_vision
-    PREFIX pytorch_vision
-    INSTALL_DIR ${CMAKE_BINARY_DIR}
-    GIT_REPOSITORY https://github.com/pytorch/vision.git
-    GIT_TAG ${PYTORCH_VISION_COMMIT}
-    GIT_CONFIG advice.detachedHead=false
-    PATCH_COMMAND test -f ${PYTORCH_VISION_COMPLETE} && echo Skipping || git apply ${PYTORCH_VISION_PATCHES} && echo Applying ${PYTORCH_VISION_PATCHES}
-    CMAKE_ARGS -DWITH_CUDA=${PYTORCH_USE_CUDA} -DCMAKE_PREFIX_PATH=${TORCH_LOCATION} -DCMAKE_INSTALL_PREFIX=${TORCHVISION_LOCATION}
+
+  set(PYTORCH_VISION_FLAGS
+      -DWITH_CUDA=${PYTORCH_USE_CUDA} -DCMAKE_PREFIX_PATH=${TORCH_LOCATION} -DCMAKE_INSTALL_PREFIX=${TORCHVISION_LOCATION}
       -DCMAKE_INCLUDE_PATH=${PROTOBUF_INCLUDE_DIR} -DCMAKE_LIBRARY_PATH=${PROTOBUF_LIB_DIR}
       "-DCMAKE_CXX_FLAGS=-isystem ${CMAKE_BINARY_DIR}/pytorch/src/pytorch/ -isystem ${SPDLOG_INCLUDE_DIR} -isystem ${PROTOBUF_INCLUDE_DIR}"
       "-DCMAKE_CUDA_FLAGS=-isystem ${CMAKE_BINARY_DIR}/pytorch/src/pytorch/ -isystem ${SPDLOG_INCLUDE_DIR} -isystem ${PROTOBUF_INCLUDE_DIR}"
-      -DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc
-    BUILD_COMMAND ""
+      -DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc)
+
+  ExternalProject_Add(
+    pytorch_vision
+    PREFIX pytorch_vision
+    GIT_REPOSITORY https://github.com/pytorch/vision.git
+    GIT_TAG ${PYTORCH_VISION_COMMIT}
+    GIT_CONFIG advice.detachedHead=false
+    UPDATE_DISCONNECTED 1
+    PATCH_COMMAND "" #test -f ${PYTORCH_VISION_COMPLETE} && echo Skipping || git apply ${PYTORCH_VISION_PATCHES} && echo Applying ${PYTORCH_VISION_PATCHES}
+    CONFIGURE_COMMAND ""
+    BUILD_COMMAND sh ${CMAKE_SOURCE_DIR}/cmake/build_external.sh PYTORCH_VISION ${CMAKE_BINARY_DIR}/pytorch_vision ${PYTORCH_VISION_COMPLETE} src/pytorch_vision src/pytorch_vision-build ${N} "install" ${CMAKE_COMMAND} ${PYTORCH_VISION_FLAGS}
+    INSTALL_COMMAND ""
     DEPENDS protobuf pytorch
   )
 
@@ -968,9 +971,10 @@ if (USE_TENSORRT)
       GIT_REPOSITORY https://github.com/NVIDIA/TensorRT.git
       GIT_TAG ${TENSORRT_VERSION}
       GIT_CONFIG advice.detachedHead=false
+      UPDATE_DISCONNECTED 1
       PATCH_COMMAND sh ${CMAKE_SOURCE_DIR}/cmake/patch_external.sh TENSORRT ${CMAKE_BINARY_DIR}/tensorrt-oss/src/tensorrt-oss-stamp tensorrt-oss-download tensorrt-oss-patch ${CMAKE_BINARY_DIR}/tensorrt-oss/src/tensorrt-oss ${TRT_PATCHES}
       CONFIGURE_COMMAND ""
-      BUILD_COMMAND sh ${CMAKE_SOURCE_DIR}/cmake/build_external.sh TENSORRT ${CMAKE_BINARY_DIR}/tensorrt-oss ${TENSORRT_COMPLETE} src/tensorrt-oss src/tensorrt-oss-build ${N} ${CMAKE_COMMAND} ${TRT_FLAGS}
+      BUILD_COMMAND sh ${CMAKE_SOURCE_DIR}/cmake/build_external.sh TENSORRT ${CMAKE_BINARY_DIR}/tensorrt-oss ${TENSORRT_COMPLETE} src/tensorrt-oss src/tensorrt-oss-build ${N} "" ${CMAKE_COMMAND} ${TRT_FLAGS}
       INSTALL_COMMAND ""
     )
 
@@ -978,74 +982,72 @@ if (USE_TENSORRT)
     list(INSERT TENSORRT_INC_DIR 0 ${CMAKE_BINARY_DIR}/tensorrt-oss/src/tensorrt-oss/include)
 endif()
 
-if (USE_HTTP_SERVER_OATPP)
-    set(OATPP_VERSION "6b4413552acf4ebcd0d3df411d6a2a6fc78cabc1") # pre-1.2.5
-    set(OATPP_SWAGGER_VERSION "8b70945f0e9bcf09e16b5cb4be08e752097b0288") # pre-1.2.5
-    set(OATPP_ZLIB_VERSION "1846f759b7483e2386236a75728c1cbbb935b2a6") # pre-1.2.5
-    ExternalProject_Add(
-        oatpp
-        PREFIX oatpp
-        URL https://github.com/oatpp/oatpp/archive/${OATPP_VERSION}.tar.gz
-        URL_HASH SHA256=4517457270d0fb0096ea2796297f6901c619650843d242c2748284d89450217b
-        BUILD_IN_SOURCE true
-        CMAKE_ARGS -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF -DOATPP_INSTALL=OFF -DOATPP_BUILD_TESTS=OFF
-        INSTALL_COMMAND ""
-    )
-    ExternalProject_Add(
-        oatpp-zlib
-        PREFIX oatpp-zlib
-        URL https://github.com/oatpp/oatpp-zlib/archive/${OATPP_ZLIB_VERSION}.tar.gz
-        URL_HASH SHA256=405961fda17ae8fd1be1381e505b0a078b92d11c6f743a01e1827ab95c1ee810
-        CMAKE_ARGS
-            -DCMAKE_BUILD_TYPE=Release
-            -DBUILD_SHARED_LIBS=OFF
-            -DOATPP_BUILD_TESTS=OFF
-            -DOATPP_INSTALL=OFF
-            -DOATPP_MODULES_LOCATION=CUSTOM
-            -DOATPP_DIR_SRC=${CMAKE_BINARY_DIR}/oatpp/src/oatpp/src
-            -DOATPP_DIR_LIB=${CMAKE_BINARY_DIR}/oatpp/src/oatpp/src
-        BUILD_IN_SOURCE true
-        INSTALL_COMMAND ""
-        DEPENDS oatpp
-    )
-    ExternalProject_Add(
-        oatpp-swagger
-        PREFIX oatpp-swagger
-        URL https://github.com/oatpp/oatpp-swagger/archive/${OATPP_SWAGGER_VERSION}.tar.gz
-        URL_HASH SHA256=561a98c54550a703c3c2bde9658ab426d4da92345a4841ba68f5477feece42dc
-        BUILD_IN_SOURCE true
-        INSTALL_COMMAND ""
-        CMAKE_ARGS
-            -DCMAKE_BUILD_TYPE=Release
-            -DBUILD_SHARED_LIBS=OFF
-            -DOATPP_BUILD_TESTS=OFF
-            -DOATPP_INSTALL=OFF
-            -DOATPP_MODULES_LOCATION=CUSTOM
-            -DOATPP_DIR_SRC=${CMAKE_BINARY_DIR}/oatpp/src/oatpp/src
-            -DOATPP_DIR_LIB=${CMAKE_BINARY_DIR}/oatpp/src/oatpp/src
-        DEPENDS oatpp
-    )
+set(OATPP_VERSION "1.2.5")
+set(OATPP_SWAGGER_VERSION "1.2.5")
+set(OATPP_ZLIB_VERSION "1.2.5")
+ExternalProject_Add(
+    oatpp
+    PREFIX oatpp
+    URL https://github.com/oatpp/oatpp/archive/${OATPP_VERSION}.tar.gz
+    URL_HASH SHA256=36276e8b23e68ece1e6093c3f06fc80e3d42a5f4e47cdeef5e7e63f36eeddaad
+    BUILD_IN_SOURCE true
+    CMAKE_ARGS -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF -DOATPP_INSTALL=OFF -DOATPP_BUILD_TESTS=OFF
+    INSTALL_COMMAND ""
+)
+ExternalProject_Add(
+    oatpp-zlib
+    PREFIX oatpp-zlib
+    URL https://github.com/oatpp/oatpp-zlib/archive/${OATPP_ZLIB_VERSION}.tar.gz
+    URL_HASH SHA256=0009bc160605e804ae69e3627e2279cd27fedabe27fd16f552ea2af6a6f5433d
+    CMAKE_ARGS
+        -DCMAKE_BUILD_TYPE=Release
+        -DBUILD_SHARED_LIBS=OFF
+        -DOATPP_BUILD_TESTS=OFF
+        -DOATPP_INSTALL=OFF
+        -DOATPP_MODULES_LOCATION=CUSTOM
+        -DOATPP_DIR_SRC=${CMAKE_BINARY_DIR}/oatpp/src/oatpp/src
+        -DOATPP_DIR_LIB=${CMAKE_BINARY_DIR}/oatpp/src/oatpp/src
+    BUILD_IN_SOURCE true
+    INSTALL_COMMAND ""
+    DEPENDS oatpp
+)
+ExternalProject_Add(
+    oatpp-swagger
+    PREFIX oatpp-swagger
+    URL https://github.com/oatpp/oatpp-swagger/archive/${OATPP_SWAGGER_VERSION}.tar.gz
+    URL_HASH SHA256=56dd44f3b041fe432c27b52f741bb98f1ef97b3c6c4095dc8b9d76e840639ac8
+    BUILD_IN_SOURCE true
+    INSTALL_COMMAND ""
+    CMAKE_ARGS
+        -DCMAKE_BUILD_TYPE=Release
+        -DBUILD_SHARED_LIBS=OFF
+        -DOATPP_BUILD_TESTS=OFF
+        -DOATPP_INSTALL=OFF
+        -DOATPP_MODULES_LOCATION=CUSTOM
+        -DOATPP_DIR_SRC=${CMAKE_BINARY_DIR}/oatpp/src/oatpp/src
+        -DOATPP_DIR_LIB=${CMAKE_BINARY_DIR}/oatpp/src/oatpp/src
+    DEPENDS oatpp
+)
 
-    # FIXME(sileht): we should copy res outside build dir and dynamically looks at runtime at different places
-    add_definitions("-DOATPP_SWAGGER_RES_PATH=\"${CMAKE_BINARY_DIR}/oatpp-swagger/src/oatpp-swagger/res/\"")
+# FIXME(sileht): we should copy res outside build dir and dynamically looks at runtime at different places
+add_definitions("-DOATPP_SWAGGER_RES_PATH=\"${CMAKE_BINARY_DIR}/oatpp-swagger/src/oatpp-swagger/res/\"")
 
-    set(OATPP_LIB_DEPS
-        ${CMAKE_BINARY_DIR}/oatpp/src/oatpp/src/liboatpp.a
-        ${CMAKE_BINARY_DIR}/oatpp-zlib/src/oatpp-zlib/src/liboatpp-zlib.a
-        ${CMAKE_BINARY_DIR}/oatpp-swagger/src/oatpp-swagger/src/liboatpp-swagger.a
-        z  # zlib
-    )
-    include_directories(
-        SYSTEM ${CMAKE_BINARY_DIR}/oatpp/src/oatpp/src
-        SYSTEM ${CMAKE_BINARY_DIR}/oatpp-zlib/src/oatpp-zlib/src
-        SYSTEM ${CMAKE_BINARY_DIR}/oatpp-swagger/src/oatpp-swagger/src
-    )
-    set(OATPP_INCLUDE_DIRS
-        ${CMAKE_BINARY_DIR}/oatpp/src/oatpp/src
-        ${CMAKE_BINARY_DIR}/oatpp-zlib/src/oatpp-zlib/src
-        ${CMAKE_BINARY_DIR}/oatpp-swagger/src/oatpp-swagger/src
-    )
-endif()
+set(OATPP_LIB_DEPS
+    ${CMAKE_BINARY_DIR}/oatpp/src/oatpp/src/liboatpp.a
+    ${CMAKE_BINARY_DIR}/oatpp-zlib/src/oatpp-zlib/src/liboatpp-zlib.a
+    ${CMAKE_BINARY_DIR}/oatpp-swagger/src/oatpp-swagger/src/liboatpp-swagger.a
+    z  # zlib
+)
+include_directories(
+    SYSTEM ${CMAKE_BINARY_DIR}/oatpp/src/oatpp/src
+    SYSTEM ${CMAKE_BINARY_DIR}/oatpp-zlib/src/oatpp-zlib/src
+    SYSTEM ${CMAKE_BINARY_DIR}/oatpp-swagger/src/oatpp-swagger/src
+)
+set(OATPP_INCLUDE_DIRS
+    ${CMAKE_BINARY_DIR}/oatpp/src/oatpp/src
+    ${CMAKE_BINARY_DIR}/oatpp-zlib/src/oatpp-zlib/src
+    ${CMAKE_BINARY_DIR}/oatpp-swagger/src/oatpp-swagger/src
+)
 
 if (USE_HTTP_SERVER)
         ExternalProject_Add(
