@@ -26,7 +26,7 @@
 #include "utils/utils.hpp"
 #include "oatpp/core/Types.hpp"
 #include "oatpp/core/macro/codegen.hpp"
-#include "gpuid.hpp"
+#include "ddtypes.hpp"
 
 namespace dd
 {
@@ -53,6 +53,12 @@ namespace dd
               "type), regression only";
       };
       DTO_FIELD(Int32, ntargets) = 0;
+
+      DTO_FIELD_INFO(segmentation)
+      {
+        info->description = "whether the model type is segmentation";
+      };
+      DTO_FIELD(Boolean, segmentation) = false;
 
       DTO_FIELD_INFO(from_repository)
       {
