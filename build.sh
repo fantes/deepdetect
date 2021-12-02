@@ -154,7 +154,7 @@ gpu_build() {
         "tf") extra_flags="$default_flags -DUSE_TF=ON" ;;
         "caffe2") extra_flags="$default_flags -DUSE_CAFFE2=ON" ;;
         "torch") extra_flags="$default_flags -DUSE_TORCH=ON" ;;
-        "tensorrt") extra_flags="-DUSE_TENSORRT=ON -DUSE_CAFFE=OFF" ;;
+	"tensorrt") extra_flags="-DUSE_TENSORRT=ON -DUSE_CAFFE=OFF -DUSE_CUDA_CV=ON -DUSE_OPENCV_VERSION=4 -DOpenCV_DIR=${DEEPDETECT_OPENCV4_BUILD_PATH}";;
         *) extra_flags="$default_flags";;
     esac
     cmake .. $extra_flags -DCUDA_ARCH="${DEEPDETECT_CUDA_ARCH} -DRELEASE=${DEEPDETECT_RELEASE}"
@@ -180,6 +180,7 @@ elif [[ ${DEEPDETECT_ARCH} == "gpu" ]]; then
     echo "  DEEPDETECT_ARCH      : ${DEEPDETECT_ARCH}"
     echo "  DEEPDETECT_BUILD     : ${DEEPDETECT_BUILD}"
     echo "  DEEPDETECT_CUDA_ARCH : ${DEEPDETECT_CUDA_ARCH}"
+    echo "  DEEPDETECT_OPENCV4_BUILD_PATH : ${DEEPDETECT_OPENCV4_BUILD_PATH}"
     echo ""
     gpu_build
 else

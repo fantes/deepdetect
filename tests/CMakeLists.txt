@@ -170,6 +170,20 @@ if (USE_CAFFE)
     "multiword_ocr.tar.gz"
     "deploy.prototxt"
   )
+  DOWNLOAD_DATASET(
+    "face detection test model"
+    "https://deepdetect.com/models/init/desktop/images/detection/faces_512.tar.gz"
+    "examples/caffe/faces_512"
+    "faces_512.tar.gz"
+    "deploy.prototxt"
+  )
+  DOWNLOAD_DATASET(
+    "age estimation test model"
+    "https://deepdetect.com/models/init/desktop/images/classification/age_real.tar.gz"
+    "examples/caffe/age_real"
+    "age_real.tar.gz"
+    "deploy.prototxt"
+  )
 endif()
 
 DOWNLOAD_DATASET(
@@ -337,6 +351,13 @@ if (USE_TENSORRT)
     "resnet_onnx_trt"
     )
   DOWNLOAD_DATASET(
+    "ONNX yolox model"
+    "https://deepdetect.com/models/init/desktop/images/detection/yolox_onnx_trt.tar.gz"
+    "examples/trt"
+    "yolox_onnx_trt.tar.gz"
+    "yolox_onnx_trt"
+    )
+  DOWNLOAD_DATASET(
     "ONNX CycleGAN model"
     "https://deepdetect.com/dd/examples/tensorrt/cyclegan_resnet_attn_onnx_trt.tar.gz"
     "examples/trt"
@@ -386,11 +407,18 @@ if (USE_TORCH)
     "fasterrcnn_train_torch"
     )
   DOWNLOAD_DATASET(
-    "Torchvision training DeepLabV3 Resnet50 model"
+    "Torchvision inference DeepLabV3 Resnet50 model"
     "https://www.deepdetect.com/dd/examples/torch/deeplabv3_torch.tar.gz"
     "examples/torch"
     "deeplabv3_torch.tar.gz"
     "deeplabv3_torch"
+    )
+    DOWNLOAD_DATASET(
+    "Torchvision training DeepLabV3 Resnet50 model"
+    "https://www.deepdetect.com/dd/examples/torch/deeplabv3_training_torch.tar.gz"
+    "examples/torch"
+    "deeplabv3_training_torch.tar.gz"
+    "deeplabv3_training_torch"
     )
   DOWNLOAD_DATASET(
     "Torch BERT classification test model"
@@ -483,3 +511,8 @@ if (USE_SIMSEARCH)
   endif()
 
 endif()
+
+# Python tests
+add_test(NAME ut_python
+       WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/tests"
+       COMMAND python3 -m unittest ut_python -v)

@@ -1,91 +1,36 @@
+defaults:
+  actions:
+    queue:
+      name: default
+      method: rebase
+
+queue_rules:
+  - name: default
+    conditions:
+      - "status-success=Semantic Pull Request"
+      - "status-success=Jenkins - Unit tests GPU"
+      - or:
+        - "label!=ci:docker"
+        - "status-success=Jenkins - Docker build"
+      
 pull_request_rules:
   - name: "automatic merge with 2 reviews"
     conditions:
       - "base=master"
-      - "status-success=Semantic Pull Request"
-      - "status-success=Jenkins - Unit tests GPU"
-      - "label=process:ready-to-review"
-      - "label!=ci:docker"
-      - "label!=process:manual-merge"
-      - "#approved-reviews-by>=2"
-      - "#changes-requested-reviews-by=0"
-    actions:
-      merge:
-        strict: "smart"
-        method: rebase
-      label:
-        add:
-          - process:merge-queued
-
-  - name: "automatic merge with 2 reviews and docker tests"
-    conditions:
-      - "base=master"
-      - "status-success=Semantic Pull Request"
-      - "status-success=Jenkins - Unit tests GPU"
-      - "status-success=Jenkins - Docker build"
-      - "label=process:ready-to-review"
-      - "label=ci:docker"
-      - "label!=process:manual-merge"
-      - "#approved-reviews-by>=2"
-      - "#changes-requested-reviews-by=0"
-    actions:
-      merge:
-        strict: "smart"
-        method: rebase
-      label:
-        add:
-          - process:merge-queued
-
-  - name: "automatic merge with label process:no-need-review"
-    conditions:
-      - "base=master"
-      - "status-success=Semantic Pull Request"
-      - "status-success=Jenkins - Unit tests GPU"
-      - "label=process:no-need-review"
-      - "label!=ci:docker"
       - "label!=process:manual-merge"
       - "#changes-requested-reviews-by=0"
-    actions:
-      merge:
-        strict: "smart"
-        method: rebase
-      label:
-        add:
-          - process:merge-queued
-        
-  - name: "automatic merge with labels process:no-need-review and ci:docker"
-    conditions:
-      - "base=master"
       - "status-success=Semantic Pull Request"
       - "status-success=Jenkins - Unit tests GPU"
-      - "status-success=Jenkins - Docker build"
-      - "label=process:no-need-review"
-      - "label=ci:docker"
-      - "label!=process:manual-merge"
-      - "#changes-requested-reviews-by=0"
+      - or:
+        - "label!=ci:docker"
+        - "status-success=Jenkins - Docker build"
+      - or:
+        - "label=process:no-need-review"
+        - and:
+          - "#approved-reviews-by>=2"
+          - "label=process:ready-to-review"
     actions:
-      merge:
-        strict: "smart"
-        method: rebase
-
-  - name: "remove process:merge-queued, ci failures"
-    conditions:
-      - "base=master"
-      - "#status-failure>0"
-    actions:
-      label:
-        remove:
-          - process:merge-queued
-        
-  - name: "remove process:merge-queued, missing reviews"
-    conditions:
-      - "base=master"
-      - "label!=process:no-need-review"
-      - "#approved-reviews-by<2"
-    actions:
-      label:
-        remove:
-          - process:merge-queued
+      queue:
 
   - name: "request review"
     conditions:
@@ -126,31 +71,19 @@ pull_request_rules:
       label:
         add:
             - ci:docker
-
-  - name: cleanup merge-queued label
+            
+  - name: add merge-queued label
     conditions:
-      - "label!=process:ready-to-review"
-      - "label!=process:no-need-review"
-    actions: {label: {remove: ["process:merge-queued"]}}
-
-  - name: cleanup merge-queued label
+      - queue-position>=0
+    actions:
+      label:
+        add:
+          - process:merge-queued
+          
+  - name: remove merge-queued label
     conditions:
-      - "#approved-reviews-by<2"
-      - "label!=process:no-need-review"
-    actions: {label: {remove: ["process:merge-queued"]}}
-
-  - name: cleanup merge-queued label
-    conditions:
-      - "#changes-requested-reviews-by>0"
-      - "label!=process:no-need-review"
-    actions: {label: {remove: ["process:merge-queued"]}}
-
-  - name: cleanup merge-queued label
-    conditions:
-      - "status-failure=Jenkins - Unit tests GPU"
-    actions: {label: {remove: ["process:merge-queued"]}}
-
-  - name: cleanup merge-queued label
-    conditions:
-      - "status-failure=Jenkins - Docker build"
-    actions: {label: {remove: ["process:merge-queued"]}}
+      - queue-position<0
+    actions:
+      label:
+        remove:
+          - process:merge-queued

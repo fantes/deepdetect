@@ -49,6 +49,7 @@ namespace dd
     applyCrop(src, _crop_params);
     applyMirror(src);
     applyRotate(src);
+    applyNoise(src);
   }
 
   void
@@ -87,8 +88,9 @@ namespace dd
       {
         // geometry on bboxes
         std::vector<std::vector<float>> bboxes_c = bboxes;
-        applyGeometryBBox(bboxes_c, geoparams, src_c.cols, src_c.rows);
-        if (!bboxes_c.empty()) // some bboxes remain
+        applyGeometryBBox(bboxes_c, geoparams, src_c.cols,
+                          src_c.rows); // uses the stored lambda
+        if (!bboxes_c.empty())         // some bboxes remain
           {
             src = src_c;
             bboxes = bboxes_c;
@@ -104,9 +106,42 @@ namespace dd
             t[bb][d] = bboxes.at(bb).at(d);
           }
       }
+    applyNoise(src);
   }
 
-  bool TorchImgRandAugCV::applyMirror(cv::Mat &src)
+  void TorchImgRandAugCV::augment_with_segmap(cv::Mat &src, cv::Mat &tgt)
+  {
+    GeometryParams geoparams = _geometry_params;
+    applyGeometry(src, geoparams, true, true);
+    if (!geoparams._lambda.empty())
+      applyGeometry(tgt, geoparams, false, false); // reuses geoparams
+
+    applyCutout(src, _cutout_params);
+    bool mirrored = applyMirror(src);
+    if (mirrored)
+      applyMirror(tgt, false);
+    int rot = applyRotate(src);
+    if (rot != 0)
+      applyRotate(tgt, false, rot);
+    applyNoise(src);
+  }
+
+  bool TorchImgRandAugCV::roll_weighted_dice(const float &prob)
+  {
+    // Draw random between 0 and 1
+    float r1 = 0.0;
+#pragma omp critical
+    {
+      r1 = _uniform_real_1(_rnd_gen);
+    }
+    if (r1 > prob)
+      return false;
+    else
+      return true;
+  }
+
+  /*- transforms -*/
+  bool TorchImgRandAugCV::applyMirror(cv::Mat &src, const bool &sample)
   {
     if (!_mirror)
       return false;
@@ -114,7 +149,10 @@ namespace dd
     bool mirror = false;
 #pragma omp critical
     {
-      mirror = _bernouilli(_rnd_gen);
+      if (sample)
+        mirror = _bernouilli(_rnd_gen);
+      else
+        mirror = true;
     }
     if (mirror)
       {
@@ -137,15 +175,15 @@ namespace dd
       }
   }
 
-  int TorchImgRandAugCV::applyRotate(cv::Mat &src)
+  int TorchImgRandAugCV::applyRotate(cv::Mat &src, const bool &sample, int rot)
   {
     if (!_rotate)
       return -1;
 
-    int rot = 0;
 #pragma omp critical
     {
-      rot = _uniform_int_rotate(_rnd_gen);
+      if (sample)
+        rot = _uniform_int_rotate(_rnd_gen);
     }
     if (rot == 0)
       return rot;
@@ -236,13 +274,7 @@ namespace dd
     if (cp._prob == 0.0)
       return;
 
-    // Draw random between 0 and 1
-    float r1 = 0.0;
-#pragma omp critical
-    {
-      r1 = _uniform_real_1(_rnd_gen);
-    }
-    if (r1 > cp._prob)
+    if (!roll_weighted_dice(cp._prob))
       return;
 
 #pragma omp critical
@@ -355,6 +387,7 @@ namespace dd
             x0min = x0;
             y0min = y0;
           }
+
         x0 = ((x0max - x0min) * _uniform_real_1(_rnd_gen) + x0min);
         x1 = 3 * cols - x0;
         y0 = ((y0max - y0min) * _uniform_real_1(_rnd_gen) + y0min);
@@ -409,19 +442,18 @@ namespace dd
   }
 
   void TorchImgRandAugCV::applyGeometry(cv::Mat &src, GeometryParams &cp,
-                                        const bool &store_rparams)
+                                        const bool &store_rparams,
+                                        const bool &sample)
   {
     if (!cp._prob)
       return;
 
     // enlarge image
-    float g1 = 0.0;
-#pragma omp critical
-    {
-      g1 = _uniform_real_1(_rnd_gen);
-    }
-    if (g1 > cp._prob)
-      return;
+    if (sample)
+      {
+        if (!roll_weighted_dice(cp._prob))
+          return;
+      }
 
     cv::Mat src_enlarged;
     getEnlargedImage(src, cp, src_enlarged);
@@ -434,12 +466,20 @@ namespace dd
     // get perpective matrix
 #pragma omp critical
     {
-      getQuads(src.rows, src.cols, cp, inputQuad, outputQuad);
+      if (sample)
+        getQuads(src.rows, src.cols, cp, inputQuad, outputQuad);
     }
 
     // warp perspective
-    cv::Mat lambda = cv::getPerspectiveTransform(inputQuad, outputQuad);
-    cv::warpPerspective(src_enlarged, src, lambda, src.size());
+    cv::Mat lambda
+        = (sample ? cv::getPerspectiveTransform(inputQuad, outputQuad)
+                  : cp._lambda);
+    int inter_flag
+        = cv::INTER_NEAREST; //(sample ? cv::INTER_LINEAR : cv::INTER_NEAREST);
+    int border_mode = (cp._geometry_pad_mode == 1 ? cv::BORDER_CONSTANT
+                                                  : cv::BORDER_REPLICATE);
+    cv::warpPerspective(src_enlarged, src, lambda, src.size(), inter_flag,
+                        border_mode);
 
     if (store_rparams)
       cp._lambda = lambda;
@@ -545,5 +585,233 @@ namespace dd
 
     // filter bboxes
     filterBBoxes(bboxes, cp, img_width, img_height);
+  }
+
+  void TorchImgRandAugCV::applyNoise(cv::Mat &src)
+  {
+    if (_noise_params._rgb)
+      {
+        cv::Mat bgr;
+        cv::cvtColor(src, bgr, cv::COLOR_RGB2BGR);
+        src = bgr;
+      }
+
+    if (_noise_params._decolorize)
+      applyNoiseDecolorize(src);
+    if (_noise_params._gauss_blur)
+      applyNoiseGaussianBlur(src);
+    if (_noise_params._hist_eq)
+      applyNoiseHistEq(src);
+    if (_noise_params._clahe)
+      applyNoiseClahe(src);
+    if (_noise_params._jpg)
+      applyNoiseJPG(src);
+    if (_noise_params._erosion)
+      applyNoiseErosion(src);
+    if (_noise_params._posterize)
+      applyNoisePosterize(src);
+    if (_noise_params._inverse)
+      applyNoiseInverse(src);
+    if (_noise_params._saltpepper)
+      applyNoiseSaltpepper(src);
+    if (_noise_params._convert_to_hsv)
+      applyNoiseConvertHSV(src);
+    if (_noise_params._convert_to_lab)
+      applyNoiseConvertLAB(src);
+
+    if (_noise_params._rgb)
+      {
+        cv::Mat rgb;
+        cv::cvtColor(src, rgb, cv::COLOR_BGR2RGB);
+        src = rgb;
+      }
+  }
+
+  void TorchImgRandAugCV::applyNoiseDecolorize(cv::Mat &src)
+  {
+    if (!roll_weighted_dice(_noise_params._prob))
+      return;
+    if (src.channels() > 1)
+      {
+        cv::Mat grayscale;
+        cv::cvtColor(src, grayscale, cv::COLOR_BGR2GRAY);
+        cv::cvtColor(grayscale, src, cv::COLOR_GRAY2BGR);
+      }
+  }
+
+  void TorchImgRandAugCV::applyNoiseGaussianBlur(cv::Mat &src)
+  {
+    if (!roll_weighted_dice(_noise_params._prob))
+      return;
+    cv::Mat out;
+    cv::GaussianBlur(src, out, cv::Size(7, 7), 1.5);
+    src = out;
+  }
+
+  void TorchImgRandAugCV::applyNoiseHistEq(cv::Mat &src)
+  {
+    if (!roll_weighted_dice(_noise_params._prob))
+      return;
+    if (src.channels() > 1)
+      {
+        cv::Mat ycrcb_image;
+        cv::cvtColor(src, ycrcb_image, cv::COLOR_BGR2YCrCb);
+        // Extract the L channel
+        std::vector<cv::Mat> ycrcb_planes(3);
+        cv::split(ycrcb_image, ycrcb_planes);
+        // now we have the L image in ycrcb_planes[0]
+        cv::Mat dst;
+        cv::equalizeHist(ycrcb_planes[0], dst);
+        ycrcb_planes[0] = dst;
+        cv::merge(ycrcb_planes, ycrcb_image);
+        // convert back to RGB
+        cv::cvtColor(ycrcb_image, src, cv::COLOR_YCrCb2BGR);
+      }
+    else
+      {
+        cv::Mat temp_img;
+        cv::equalizeHist(src, temp_img);
+        src = temp_img;
+      }
+  }
+
+  void TorchImgRandAugCV::applyNoiseClahe(cv::Mat &src)
+  {
+    if (!roll_weighted_dice(_noise_params._prob))
+      return;
+    cv::Ptr<cv::CLAHE> clahe = cv::createCLAHE();
+    clahe->setClipLimit(4);
+    if (src.channels() > 1)
+      {
+        cv::Mat ycrcb_image;
+        cv::cvtColor(src, ycrcb_image, cv::COLOR_BGR2YCrCb);
+        // Extract the L channel
+        std::vector<cv::Mat> ycrcb_planes(3);
+        cv::split(ycrcb_image, ycrcb_planes);
+        // now we have the L image in ycrcb_planes[0]
+        cv::Mat dst;
+        clahe->apply(ycrcb_planes[0], dst);
+        ycrcb_planes[0] = dst;
+        cv::merge(ycrcb_planes, ycrcb_image);
+        // convert back to RGB
+        cv::cvtColor(ycrcb_image, src, cv::COLOR_YCrCb2BGR);
+      }
+    else
+      {
+        cv::Ptr<cv::CLAHE> clahe = cv::createCLAHE();
+        clahe->setClipLimit(4);
+        cv::Mat temp_img;
+        clahe->apply(src, temp_img);
+        src = temp_img;
+      }
+  }
+
+  void TorchImgRandAugCV::applyNoiseJPG(cv::Mat &src)
+  {
+    if (!roll_weighted_dice(_noise_params._prob))
+      return;
+    std::vector<uchar> buf;
+    std::vector<int> params;
+    params.push_back(cv::IMWRITE_JPEG_QUALITY);
+#pragma omp critical
+    {
+      params.push_back(_uniform_real_1(_rnd_gen) * 100.0);
+    }
+    cv::imencode(".jpg", src, buf, params);
+    src = cv::imdecode(buf, cv::IMREAD_COLOR);
+  }
+
+  void TorchImgRandAugCV::applyNoiseErosion(cv::Mat &src)
+  {
+    if (!roll_weighted_dice(_noise_params._prob))
+      return;
+    cv::Mat element
+        = cv::getStructuringElement(2, cv::Size(3, 3), cv::Point(1, 1));
+    cv::erode(src, src, element);
+  }
+
+  void TorchImgRandAugCV::applyNoisePosterize(cv::Mat &src)
+  {
+    if (!roll_weighted_dice(_noise_params._prob))
+      return;
+    int div = 64;
+    cv::Mat lookUpTable(1, 256, CV_8U);
+    uchar *p = lookUpTable.data;
+    const int div_2 = div / 2;
+    for (int i = 0; i < 256; ++i)
+      {
+        p[i] = i / div * div + div_2;
+      }
+    cv::Mat tmp_img;
+    cv::LUT(src, lookUpTable, tmp_img);
+    src = tmp_img;
+  }
+
+  void TorchImgRandAugCV::applyNoiseInverse(cv::Mat &src)
+  {
+    if (!roll_weighted_dice(_noise_params._prob))
+      return;
+    cv::Mat tmp_img;
+    cv::bitwise_not(src, tmp_img);
+    src = tmp_img;
+  }
+
+  void TorchImgRandAugCV::applyNoiseSaltpepper(cv::Mat &src)
+  {
+    if (!roll_weighted_dice(_noise_params._prob))
+      return;
+    const int noise_pixels_n
+        = std::floor(_noise_params._saltpepper_fraction * src.cols * src.rows);
+    const std::vector<uchar> val = { 0, 0, 0 };
+    if (src.channels() == 1)
+      {
+#pragma omp critical
+        {
+          for (int k = 0; k < noise_pixels_n; ++k)
+            {
+              const int i = _uniform_real_1(_rnd_gen) * src.cols;
+              const int j = _uniform_real_1(_rnd_gen) * src.rows;
+              uchar *ptr = src.ptr<uchar>(j);
+              ptr[i] = val[0];
+            }
+        }
+      }
+    else if (src.channels() == 3)
+      { // color image
+#pragma omp critical
+        {
+          for (int k = 0; k < noise_pixels_n; ++k)
+            {
+              const int i = _uniform_real_1(_rnd_gen) * src.cols;
+              const int j = _uniform_real_1(_rnd_gen) * src.rows;
+              cv::Vec3b *ptr = src.ptr<cv::Vec3b>(j);
+              (ptr[i])[0] = val[0];
+              (ptr[i])[1] = val[1];
+              (ptr[i])[2] = val[2];
+            }
+        }
+      }
+  }
+
+  void TorchImgRandAugCV::applyNoiseConvertHSV(cv::Mat &src)
+  {
+    if (!roll_weighted_dice(_noise_params._prob))
+      return;
+    cv::Mat hsv_image;
+    cv::cvtColor(src, hsv_image, cv::COLOR_BGR2HSV);
+    src = hsv_image;
+  }
+
+  void TorchImgRandAugCV::applyNoiseConvertLAB(cv::Mat &src)
+  {
+    if (!roll_weighted_dice(_noise_params._prob))
+      return;
+    int orig_depth = src.depth();
+    cv::Mat lab_image;
+    src.convertTo(lab_image, CV_32F);
+    lab_image *= 1.0 / 255;
+    cv::cvtColor(lab_image, src, cv::COLOR_BGR2Lab);
+    src.convertTo(lab_image, orig_depth);
+    src = lab_image;
   }
 }

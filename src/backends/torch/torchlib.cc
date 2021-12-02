@@ -311,7 +311,7 @@ namespace dd
         _seq_training = true;
       }
     else if (_template == "fasterrcnn" || _template == "retinanet"
-             || _template == "detr")
+             || _template == "detr" || _template == "yolox")
       {
         _bbox = true;
         _classification = false;
@@ -404,7 +404,8 @@ namespace dd
         this->_inputc._input_format = "gpt2";
       }
     // TorchVision detection models
-    else if (_template == "fasterrcnn" || _template == "retinanet")
+    else if (_template == "fasterrcnn" || _template == "retinanet"
+             || _template == "yolox")
       {
         // torchvision models output is a tuple (Loss, Predictions)
         _module._loss_id = 0;
@@ -621,58 +622,70 @@ namespace dd
 
     // TODO: set inputc dataset data augmentation options
     APIData ad_mllib = ad.getobj("parameters").getobj("mllib");
-    bool has_data_augmentation
-        = ad_mllib.has("mirror") || ad_mllib.has("rotate")
-          || ad_mllib.has("crop_size") || ad_mllib.has("cutout");
-    if (has_data_augmentation)
+    if (typeid(inputc) == typeid(ImgTorchInputFileConn))
       {
-        bool has_mirror
-            = ad_mllib.has("mirror") && ad_mllib.get("mirror").get<bool>();
-        this->_logger->info("mirror: {}", has_mirror);
-        bool has_rotate
-            = ad_mllib.has("rotate") && ad_mllib.get("rotate").get<bool>();
-        this->_logger->info("rotate: {}", has_rotate);
-        CropParams crop_params;
-        if (ad_mllib.has("crop_size"))
+        bool has_data_augmentation
+            = ad_mllib.has("mirror") || ad_mllib.has("rotate")
+              || ad_mllib.has("crop_size") || ad_mllib.has("cutout");
+        if (has_data_augmentation)
           {
-            int crop_size = ad_mllib.get("crop_size").get<int>();
-            crop_params
-                = CropParams(crop_size, inputc.width(), inputc.height());
-            this->_logger->info("crop_size : {}", crop_size);
+            bool has_mirror
+                = ad_mllib.has("mirror") && ad_mllib.get("mirror").get<bool>();
+            this->_logger->info("mirror: {}", has_mirror);
+            bool has_rotate
+                = ad_mllib.has("rotate") && ad_mllib.get("rotate").get<bool>();
+            this->_logger->info("rotate: {}", has_rotate);
+            CropParams crop_params;
+            if (ad_mllib.has("crop_size"))
+              {
+                int crop_size = ad_mllib.get("crop_size").get<int>();
+                crop_params
+                    = CropParams(crop_size, inputc.width(), inputc.height());
+                this->_logger->info("crop_size : {}", crop_size);
+              }
+            CutoutParams cutout_params;
+            if (ad_mllib.has("cutout"))
+              {
+                float cutout = ad_mllib.get("cutout").get<double>();
+                cutout_params
+                    = CutoutParams(cutout, inputc.width(), inputc.height());
+                this->_logger->info("cutout: {}", cutout);
+              }
+            GeometryParams geometry_params;
+            APIData ad_geometry = ad_mllib.getobj("geometry");
+            if (!ad_geometry.empty())
+              {
+                geometry_params._prob = ad_geometry.get("prob").get<double>();
+                this->_logger->info("geometry: {}", geometry_params._prob);
+                if (ad_geometry.has("persp_vertical"))
+                  geometry_params._geometry_persp_vertical
+                      = ad_geometry.get("persp_vertical").get<bool>();
+                if (ad_geometry.has("persp_horizontal"))
+                  geometry_params._geometry_persp_horizontal
+                      = ad_geometry.get("persp_horizontal").get<bool>();
+                if (ad_geometry.has("zoom_out"))
+                  geometry_params._geometry_zoom_out
+                      = ad_geometry.get("zoom_out").get<bool>();
+                if (ad_geometry.has("zoom_in"))
+                  geometry_params._geometry_zoom_in
+                      = ad_geometry.get("zoom_in").get<bool>();
+                if (ad_geometry.has("pad_mode"))
+                  geometry_params._geometry_pad_mode
+                      = ad_geometry.get("pad_mode").get<int>();
+              }
+            auto *img_ic = reinterpret_cast<ImgTorchInputFileConn *>(&inputc);
+            NoiseParams noise_params;
+            noise_params._rgb = img_ic->_rgb;
+            APIData ad_noise = ad_mllib.getobj("noise");
+            if (!ad_noise.empty())
+              {
+                noise_params._prob = ad_noise.get("prob").get<double>();
+                this->_logger->info("noise: {}", noise_params._prob);
+              }
+            inputc._dataset._img_rand_aug_cv = TorchImgRandAugCV(
+                has_mirror, has_rotate, crop_params, cutout_params,
+                geometry_params, noise_params);
           }
-        CutoutParams cutout_params;
-        if (ad_mllib.has("cutout"))
-          {
-            float cutout = ad_mllib.get("cutout").get<double>();
-            cutout_params
-                = CutoutParams(cutout, inputc.width(), inputc.height());
-            this->_logger->info("cutout: {}", cutout);
-          }
-        GeometryParams geometry_params;
-        APIData ad_geometry = ad_mllib.getobj("geometry");
-        if (!ad_geometry.empty())
-          {
-            geometry_params._prob = ad_geometry.get("prob").get<double>();
-            this->_logger->info("geometry: {}", geometry_params._prob);
-            if (ad_geometry.has("persp_vertical"))
-              geometry_params._geometry_persp_vertical
-                  = ad_geometry.get("persp_vertical").get<bool>();
-            if (ad_geometry.has("persp_horizontal"))
-              geometry_params._geometry_persp_horizontal
-                  = ad_geometry.get("persp_horizontal").get<bool>();
-            if (ad_geometry.has("zoom_out"))
-              geometry_params._geometry_zoom_out
-                  = ad_geometry.get("zoom_out").get<bool>();
-            if (ad_geometry.has("zoom_in"))
-              geometry_params._geometry_zoom_in
-                  = ad_geometry.get("zoom_in").get<bool>();
-            if (ad_geometry.has("pad_mode"))
-              geometry_params._geometry_pad_mode
-                  = ad_geometry.get("pad_mode").get<int>();
-          }
-        inputc._dataset._img_rand_aug_cv
-            = TorchImgRandAugCV(has_mirror, has_rotate, crop_params,
-                                cutout_params, geometry_params);
       }
     int dataloader_threads = 1;
     if (ad_mllib.has("dataloader_threads"))
@@ -711,8 +724,8 @@ namespace dd
     int64_t save_period = 0;
 
     TorchLoss tloss(_loss, _module.has_model_loss(), _seq_training, _timeserie,
-                    _regression, _classification, class_weights, _module,
-                    this->_logger);
+                    _regression, _classification, _segmentation, class_weights,
+                    _module, this->_logger);
     TorchSolver tsolver(_module, tloss, this->_logger);
 
     // logging parameters
@@ -764,6 +777,7 @@ namespace dd
     std::vector<int64_t> best_iteration_numbers(eval_dataset.size(), -1);
     _best_metric_values.resize(eval_dataset.size(),
                                std::numeric_limits<double>::infinity());
+    this->_test_names = eval_dataset.names();
 
     int it = tsolver.resume(ad_mllib, this->_mlmodel, _main_device,
                             _best_metric_values, best_iteration_numbers,
@@ -779,6 +793,10 @@ namespace dd
       {
         this->_logger->info("Training for {} iterations", iterations - it);
       }
+
+    bool resume = it > 0;
+    if (!resume)
+      this->clear_all_meas_per_iter();
 
     // [multigpu] initialize all module
     typedef struct
@@ -800,8 +818,8 @@ namespace dd
             r.module->train();
             r.loss = std::make_shared<TorchLoss>(
                 _loss, r.module->has_model_loss(), _seq_training, _timeserie,
-                _regression, _classification, class_weights, *r.module,
-                this->_logger);
+                _regression, _classification, _segmentation, class_weights,
+                *r.module, this->_logger);
           }
       }
     _module.train();
@@ -826,6 +844,11 @@ namespace dd
       {
         throw MLLibBadParamException("No data found in training dataset");
       }
+    auto training_start = steady_clock::now();
+
+    double prev_elapsed_time_ms = this->get_meas("elapsed_time_ms");
+    if (std::isnan(prev_elapsed_time_ms))
+      prev_elapsed_time_ms = 0;
 
     // `it` is the iteration count (not epoch)
     while (it < iterations)
@@ -856,70 +879,105 @@ namespace dd
               }
           }
 
+        std::exception_ptr eptr;
+
 #pragma omp parallel for num_threads(_devices.size())
         for (size_t rank = 0; rank < _devices.size(); ++rank)
           {
-            TorchBatch batch = batches[rank];
-
-            torch::Device device = _devices[rank];
-            TorchModule &rank_module
-                = device == _main_device ? _module : *ranks[rank].module;
-            TorchLoss &rank_tloss
-                = device == _main_device ? tloss : *ranks[rank].loss;
-
-            // Batch preprocessing
-            std::vector<c10::IValue> in_vals;
-            for (Tensor tensor : batch.data)
-              {
-                in_vals.push_back(tensor.to(device));
-              }
-            if (rank_module.has_model_loss())
-              {
-                // if the model computes the loss then we pass target as input
-                for (Tensor tensor : batch.target)
-                  in_vals.push_back(tensor.to(device));
-              }
-
-            if (batch.target.size() == 0)
-              {
-                throw MLLibInternalException(
-                    "Batch " + std::to_string(batch_id) + ": no target");
-              }
-            Tensor y = batch.target.at(0).to(device);
-
-            // Prediction
-            Tensor y_pred;
+            double loss_val = 0;
             try
               {
-                y_pred = torch_utils::to_tensor_safe(
-                    rank_module.forward(in_vals));
+                TorchBatch batch = batches[rank];
+
+                torch::Device device = _devices[rank];
+                TorchModule &rank_module
+                    = device == _main_device ? _module : *ranks[rank].module;
+                TorchLoss &rank_tloss
+                    = device == _main_device ? tloss : *ranks[rank].loss;
+
+                // Batch preprocessing
+                std::vector<c10::IValue> in_vals;
+                for (Tensor tensor : batch.data)
+                  {
+                    in_vals.push_back(tensor.to(device));
+                  }
+                if (rank_module.has_model_loss())
+                  {
+                    // if the model computes the loss then we pass target as
+                    // input
+                    for (Tensor tensor : batch.target)
+                      in_vals.push_back(tensor.to(device));
+                  }
+
+                if (batch.target.size() == 0)
+                  {
+                    throw MLLibInternalException(
+                        "Batch " + std::to_string(batch_id) + ": no target");
+                  }
+                Tensor y = batch.target.at(0).to(device);
+
+                // Prediction
+                Tensor y_pred;
+                if (_segmentation)
+                  {
+                    auto out_dict
+                        = rank_module.forward(in_vals).toGenericDict();
+                    y_pred = torch_utils::to_tensor_safe(out_dict.at("out"));
+                  }
+                else
+                  {
+                    y_pred = torch_utils::to_tensor_safe(
+                        rank_module.forward(in_vals));
+                  }
+
+                // sanity check
+                if (!y_pred.defined() || y_pred.numel() == 0)
+                  throw MLLibInternalException(
+                      "The model returned an empty tensor");
+
+                // Compute loss
+                Tensor loss = rank_tloss.loss(y_pred, y, in_vals);
+
+                if (iter_size > 1)
+                  loss /= iter_size;
+                if (gpu_count > 1)
+                  loss /= static_cast<double>(gpu_count);
+
+                // Backward
+                loss.backward(
+                    {},
+                    /*retain_graph=*/c10::optional<bool>(retain_graph),
+                    /*create_graph=*/false);
+                loss_val = loss.item<double>();
               }
-            catch (std::exception &e)
+            catch (...)
               {
-                this->_logger->error(std::string("Libtorch error: ")
-                                     + e.what());
-                throw MLLibInternalException(std::string("Libtorch error: ")
-                                             + e.what());
+#pragma omp critical
+                {
+                  eptr = std::current_exception();
+                }
+                continue;
               }
 
-            // Compute loss
-            Tensor loss = rank_tloss.loss(y_pred, y, in_vals);
-
-            if (iter_size > 1)
-              loss /= iter_size;
-            if (gpu_count > 1)
-              loss /= static_cast<double>(gpu_count);
-
-            // Backward
-            loss.backward({},
-                          /*retain_graph=*/c10::optional<bool>(retain_graph),
-                          /*create_graph=*/false);
 #pragma omp critical
             {
               // Retain loss for statistics
-              double loss_val = loss.item<double>();
               train_loss += loss_val;
             }
+          }
+
+        try
+          {
+            if (eptr)
+              {
+                std::rethrow_exception(eptr);
+              }
+          }
+        catch (const std::exception &e)
+          {
+            this->_logger->error(std::string("Libtorch error: ") + e.what());
+            throw MLLibInternalException(std::string("Libtorch error: ")
+                                         + e.what());
           }
 
         // Reduce gradients on device #0
@@ -1010,6 +1068,12 @@ namespace dd
               }
             this->add_meas("remain_time", remain_time_ms / 1000.0);
             this->add_meas("train_loss", train_loss);
+            int64_t elapsed_time_ms
+                = prev_elapsed_time_ms
+                  + duration_cast<milliseconds>(tstop - training_start)
+                        .count();
+            this->add_meas("elapsed_time_ms", elapsed_time_ms);
+            this->add_meas_per_iter("elapsed_time_ms", elapsed_time_ms);
             this->add_meas_per_iter("learning_rate", base_lr);
             this->add_meas_per_iter("train_loss", train_loss);
             int64_t elapsed_it = it + 1;
@@ -1052,16 +1116,21 @@ namespace dd
 
                     for (auto name : meas_names)
                       {
+                        std::string metric_name
+                            = name + "_test" + std::to_string(i);
+
                         if (name != "cmdiag" && name != "cmfull"
+                            && name != "clacc" && name != "cliou"
                             && name != "labels" && name != "test_id"
                             && name != "test_name")
                           {
                             double mval = meas_obj.get(name).get<double>();
-                            this->_logger->info("{}={}", name, mval);
-                            this->add_meas(name, mval);
-                            this->add_meas_per_iter(name, mval);
+                            this->_logger->info("{}={}", metric_name, mval);
+                            this->add_meas(metric_name, mval);
+                            this->add_meas_per_iter(metric_name, mval);
                           }
-                        else if (name == "cmdiag")
+                        else if (name == "cmdiag" || name == "clacc"
+                                 || name == "cliou")
                           {
                             std::vector<double> mdiag
                                 = meas_obj.get(name)
@@ -1074,14 +1143,15 @@ namespace dd
                                     += this->_mlmodel.get_hcorresp(i) + ":"
                                        + std::to_string(mdiag.at(i)) + " ";
                                 this->add_meas_per_iter(
-                                    name + '_'
+                                    metric_name + '_'
                                         + this->_mlmodel.get_hcorresp(i),
                                     mdiag.at(i));
                                 cnames.push_back(
                                     this->_mlmodel.get_hcorresp(i));
                               }
-                            this->_logger->info("{}=[{}]", name, mdiag_str);
-                            this->add_meas(name, mdiag, cnames);
+                            this->_logger->info("{}=[{}]", metric_name,
+                                                mdiag_str);
+                            this->add_meas(metric_name, mdiag, cnames);
                           }
                       }
                   }
@@ -1404,7 +1474,8 @@ namespace dd
 
                 for (size_t i = 0; i < out_dicts.size(); ++i)
                   {
-                    std::string uri = inputc._ids.at(i);
+                    int img_id = results_ads.size();
+                    std::string uri = inputc._ids.at(img_id);
                     auto bit = inputc._imgs_size.find(uri);
                     int rows = 1;
                     int cols = 1;
@@ -1764,7 +1835,7 @@ namespace dd
         try
           {
             out_ivalue = _module.forward(in_vals);
-            if (!_bbox)
+            if (!_bbox && !_segmentation)
               {
                 output = torch_utils::to_tensor_safe(out_ivalue);
               }
@@ -1855,6 +1926,37 @@ namespace dd
                 ++entry_id;
               }
           }
+        else if (_segmentation)
+          {
+            auto out_dict = out_ivalue.toGenericDict();
+            output = torch_utils::to_tensor_safe(out_dict.at("out"));
+            output = torch::softmax(output, 1);
+            torch::Tensor target = batch.target.at(0).to(torch::kFloat64);
+            torch::Tensor segmap
+                = torch::flatten(torch::argmax(output.squeeze(), 1))
+                      .contiguous()
+                      .to(torch::kFloat64)
+                      .to(cpu); // squeeze removes the batch size
+            double *startout = segmap.data_ptr<double>();
+            double *target_arr = target.data_ptr<double>();
+            int tensormap_size = output.size(2) * output.size(3);
+
+            for (int j = 0; j < output.size(0); ++j)
+              {
+                APIData bad;
+                std::vector<double> vals(
+                    startout,
+                    startout + tensormap_size); // TODO: classes as channels ?
+                startout += tensormap_size;
+                std::vector<double> targs(target_arr,
+                                          target_arr + tensormap_size);
+                target_arr += tensormap_size;
+                bad.add("target", targs);
+                bad.add("pred", vals);
+                ad_res.add(std::to_string(entry_id), bad);
+                ++entry_id;
+              }
+          }
         else
           {
             labels = batch.target[0].view(IntList{ -1 });
@@ -1911,7 +2013,8 @@ namespace dd
         // test_size);
       }
 
-    ad_res.add("iteration", this->get_meas("iteration") + 1);
+    ad_res.add("iteration",
+               static_cast<double>(this->get_meas("iteration") + 1));
     ad_res.add("train_loss", this->get_meas("train_loss"));
     if (_timeserie)
       {
@@ -1932,6 +2035,8 @@ namespace dd
         ad_res.add("pos_count", entry_id);
         ad_res.add("0", ad_bbox);
       }
+    else if (_segmentation)
+      ad_res.add("segmentation", true);
     ad_res.add("batch_size",
                entry_id); // here batch_size = tested entries count
     SupervisedOutput::measure(ad_res, ad_out, out, test_id, test_name);

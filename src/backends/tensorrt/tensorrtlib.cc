@@ -22,13 +22,16 @@
 #include "tensorrtlib.h"
 #include "utils/apitools.h"
 #include "tensorrtinputconns.h"
-#include "utils/apitools.h"
 #include "NvInferPlugin.h"
 #include "../parsers/onnx/NvOnnxParser.h"
 #include "protoUtils.h"
 #include <cuda_runtime_api.h>
 #include <string>
 #include "dto/service_predict.hpp"
+#ifdef USE_CUDA_CV
+#include <opencv2/core/cuda_stream_accessor.hpp>
+#endif
+#include "utils/bbox.hpp"
 
 namespace dd
 {
@@ -96,12 +99,15 @@ namespace dd
     _engineFileName = tl._engineFileName;
     _readEngine = tl._readEngine;
     _writeEngine = tl._writeEngine;
+    _arch = tl._arch;
+    _gpuid = tl._gpuid;
     _TRTContextReady = tl._TRTContextReady;
     _buffers = tl._buffers;
     _bbox = tl._bbox;
     _ctc = tl._ctc;
     _timeserie = tl._timeserie;
     _regression = tl._regression;
+    _need_nms = tl._need_nms;
     _inputIndex = tl._inputIndex;
     _outputIndex0 = tl._outputIndex0;
     _outputIndex1 = tl._outputIndex1;
@@ -191,6 +197,24 @@ namespace dd
             "cannot find caffe or onnx model in repository, make sure there's "
             "a net_tensorRT.proto or net_tensorRT.onnx file in repository"
             + this->_mlmodel._repo);
+      }
+
+    // XXX(louis): this default value should be moved out of trt lib when
+    // init_mllib will be changed to DTOs
+    _top_k = ad.has("topk") ? ad.get("topk").get<int>() : 200;
+
+    if (ad.has("template"))
+      {
+        std::string tmplate = ad.get("template").get<std::string>();
+        this->_logger->info("Model template is {}", tmplate);
+
+        if (tmplate == "yolox")
+          {
+            this->_mltype = "detection";
+            _need_nms = true;
+          }
+        else
+          throw MLLibBadParamException("Unknown template " + tmplate);
       }
 
     _builder = std::shared_ptr<nvinfer1::IBuilder>(
@@ -405,6 +429,10 @@ namespace dd
     nvinfer1::IHostMemory *n
         = _builder->buildSerializedNetwork(*network, *_builderc);
 
+    if (n == nullptr)
+      throw MLLibInternalException("Could not build model: "
+                                   + this->_mlmodel._model);
+
     return _runtime->deserializeCudaEngine(n->data(), n->size());
   }
 
@@ -518,7 +546,7 @@ namespace dd
             this->_logger->info("found {} classes", _nclasses);
           }
 
-        if (_bbox)
+        if (_bbox && !this->_mlmodel._def.empty())
           _top_k = findTopK(this->_mlmodel._def);
 
         if (_nclasses <= 0)
@@ -701,8 +729,18 @@ namespace dd
           }
       }
 
+    cudaSetDevice(_gpuid);
+    cudaStream_t cstream;
+    cudaStreamCreate(&cstream);
+
     TOutputConnectorStrategy tout(this->_outputc);
     this->_stats.transform_start();
+#ifdef USE_CUDA_CV
+    inputc._cuda_buf = static_cast<float *>(_buffers.data()[_inputIndex]);
+    auto cv_stream = cv::cuda::StreamAccessor::wrapStream(cstream);
+    inputc._cuda_stream = &cv_stream;
+#endif
+
     try
       {
         inputc.transform(predict_dto);
@@ -730,10 +768,6 @@ namespace dd
     std::vector<APIData> vrad;
     std::vector<UnsupervisedResult> unsup_results;
 
-    cudaSetDevice(_gpuid);
-    cudaStream_t cstream;
-    cudaStreamCreate(&cstream);
-
     bool enqueue_success = false;
     while (true)
       {
@@ -744,16 +778,22 @@ namespace dd
 
         try
           {
-            if (inputc._bw)
-              cudaMemcpyAsync(_buffers.data()[_inputIndex], inputc.data(),
-                              num_processed * inputc._height * inputc._width
-                                  * sizeof(float),
-                              cudaMemcpyHostToDevice, cstream);
-            else
-              cudaMemcpyAsync(_buffers.data()[_inputIndex], inputc.data(),
-                              num_processed * 3 * inputc._height
-                                  * inputc._width * sizeof(float),
-                              cudaMemcpyHostToDevice, cstream);
+#ifdef USE_CUDA_CV
+            if (!inputc._cuda)
+#endif
+              {
+                if (inputc._bw)
+                  cudaMemcpyAsync(_buffers.data()[_inputIndex], inputc.data(),
+                                  num_processed * inputc._height
+                                      * inputc._width * sizeof(float),
+                                  cudaMemcpyHostToDevice, cstream);
+                else
+                  cudaMemcpyAsync(_buffers.data()[_inputIndex], inputc.data(),
+                                  num_processed * 3 * inputc._height
+                                      * inputc._width * sizeof(float),
+                                  cudaMemcpyHostToDevice, cstream);
+              }
+
             if (!_explicit_batch)
               enqueue_success = _context->enqueue(
                   num_processed, _buffers.data(), cstream, nullptr);
@@ -847,9 +887,10 @@ namespace dd
                   }
                 bool leave = false;
                 int curi = -1;
+
                 while (true && k < results_height)
                   {
-                    if (output_params->best_bbox > 0
+                    if (!_need_nms && output_params->best_bbox > 0
                         && bboxes.size() >= static_cast<size_t>(
                                output_params->best_bbox))
                       break;
@@ -869,28 +910,39 @@ namespace dd
                       break; // this belongs to next image
                     ++k;
                     outr += det_size;
+
                     if (detection[2] < output_params->confidence_threshold)
                       continue;
 
                     // Fix border of bboxes
-                    detection[3] = std::max(((float)detection[3]), 0.0f);
-                    detection[4] = std::max(((float)detection[4]), 0.0f);
-                    detection[5] = std::min(((float)detection[5]), 1.0f);
-                    detection[6] = std::min(((float)detection[6]), 1.0f);
+                    detection[3]
+                        = std::max(((float)detection[3]), 0.0f) * (cols - 1);
+                    detection[4]
+                        = std::max(((float)detection[4]), 0.0f) * (rows - 1);
+                    detection[5]
+                        = std::min(((float)detection[5]), 1.0f) * (cols - 1);
+                    detection[6]
+                        = std::min(((float)detection[6]), 1.0f) * (rows - 1);
 
                     probs.push_back(detection[2]);
                     cats.push_back(this->_mlmodel.get_hcorresp(detection[1]));
                     APIData ad_bbox;
-                    ad_bbox.add("xmin", static_cast<double>(detection[3]
-                                                            * (cols - 1)));
-                    ad_bbox.add("ymin", static_cast<double>(detection[4]
-                                                            * (rows - 1)));
-                    ad_bbox.add("xmax", static_cast<double>(detection[5]
-                                                            * (cols - 1)));
-                    ad_bbox.add("ymax", static_cast<double>(detection[6]
-                                                            * (rows - 1)));
+                    ad_bbox.add("xmin", static_cast<double>(detection[3]));
+                    ad_bbox.add("ymin", static_cast<double>(detection[4]));
+                    ad_bbox.add("xmax", static_cast<double>(detection[5]));
+                    ad_bbox.add("ymax", static_cast<double>(detection[6]));
                     bboxes.push_back(ad_bbox);
                   }
+
+                if (_need_nms)
+                  {
+                    // We assume that bboxes are already sorted in model output
+                    bbox_utils::nms_sorted_bboxes(
+                        bboxes, probs, cats,
+                        (double)output_params->nms_threshold,
+                        (int)output_params->best_bbox);
+                  }
+
                 if (leave)
                   continue;
                 rad.add("uri", uri);
@@ -1036,20 +1088,26 @@ namespace dd
       {
         if (typeid(inputc) == typeid(ImgTensorRTInputFileConn))
           {
+            auto *img_ic
+                = reinterpret_cast<ImgTensorRTInputFileConn *>(&inputc);
             APIData chain_input;
-            if (!reinterpret_cast<ImgTensorRTInputFileConn *>(&inputc)
-                     ->_orig_images.empty())
-              chain_input.add(
-                  "imgs", reinterpret_cast<ImgTensorRTInputFileConn *>(&inputc)
-                              ->_orig_images);
+#ifdef USE_CUDA_CV
+            if (!img_ic->_cuda_images.empty())
+              {
+                if (img_ic->_orig_images.empty())
+                  chain_input.add("cuda_imgs", img_ic->_cuda_orig_images);
+                else
+                  chain_input.add("cuda_imgs", img_ic->_cuda_images);
+              }
             else
-              chain_input.add(
-                  "imgs", reinterpret_cast<ImgTensorRTInputFileConn *>(&inputc)
-                              ->_images);
-            chain_input.add(
-                "imgs_size",
-                reinterpret_cast<ImgTensorRTInputFileConn *>(&inputc)
-                    ->_images_size);
+#endif
+              {
+                if (!img_ic->_orig_images.empty())
+                  chain_input.add("imgs", img_ic->_orig_images);
+                else
+                  chain_input.add("imgs", img_ic->_images);
+              }
+            chain_input.add("imgs_size", img_ic->_images_size);
             out.add("input", chain_input);
           }
       }

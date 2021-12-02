@@ -93,6 +93,7 @@ if (NOT EXISTS ${CMAKE_BINARY_DIR}/src)
 endif()
 
 set(CMAKE_CXX_FLAGS "-g -O2 -Wall -Wextra -fopenmp -fPIC -std=c++14 -Wl,--no-as-needed -ltcmalloc_minimal")
+set(CMAKE_CXX_STANDARD 14)
 add_definitions("-DUSE_OPENCV" "-DUSE_LMDB")
 
 if(WARNING)
@@ -573,24 +574,30 @@ if (USE_TF)
 endif() # USE_TF
 
 # OpenCV
+set(OPENCV_MODULES core imgproc highgui imgcodecs)
+if (USE_CUDA_CV)
+  list(APPEND OPENCV_MODULES cudaimgproc cudaarithm cudawarping)
+endif()
+
 if (USE_OPENCV_VERSION STREQUAL "")
-  find_package(OpenCV 3 QUIET COMPONENTS core imgproc highgui imgcodecs)
+  find_package(OpenCV 3 QUIET COMPONENTS ${OPENCV_MODULES})
   if (NOT OpenCV_FOUND)
-    find_package(OpenCV 4 QUIET COMPONENTS core imgproc highgui imgcodecs)
+    find_package(OpenCV 4 QUIET COMPONENTS ${OPENCV_MODULES})
   endif()
   if (NOT OpenCV_FOUND)
-    find_package(OpenCV 2 REQUIRED COMPONENTS core imgproc highgui imgcodecs)
+    find_package(OpenCV 2 REQUIRED COMPONENTS ${OPENCV_MODULES})
   endif()
 else()
-  find_package(OpenCV ${USE_OPENCV_VERSION} REQUIRED COMPONENTS core imgproc highgui imgcodecs)
+  find_package(OpenCV ${USE_OPENCV_VERSION} REQUIRED COMPONENTS ${OPENCV_MODULES})
 endif()
+
 set(OPENCV_VERSION ${OpenCV_VERSION_MAJOR})
 include_directories(${OpenCV_INCLUDE_DIRS})
 message(STATUS "OpenCV ${OPENCV_VERSION} (${OpenCV_VERSION}) found (${OpenCV_CONFIG_PATH})")
 
 if (USE_CUDA_CV)
   message(STATUS "Using CUDA OpenCV")
-  string(APPEND CMAKE_CXX_FLAGS " -DUSE_CUDA_CV")
+  add_definitions(-DUSE_CUDA_CV)
 endif()
 
 # customized Caffe as external project
@@ -756,14 +763,13 @@ if (USE_TORCH)
     ${PYTORCH_PATCHES_PATH}/pytorch_15_compile.patch
     ${PYTORCH_PATCHES_PATH}/pytorch_19_new_logger.patch
     ${PYTORCH_PATCHES_PATH}/pytorch_19_use_new_logger.patch
-    ${PYTORCH_PATCHES_PATH}/pytorch_19_thrust_include.patch
   )
 
   message(STATUS "Configuring libtorch")
   add_definitions(-DUSE_TORCH)
 
   if (NOT TORCH_LOCATION)
-    set(PYTORCH_COMMIT v1.9.0)
+    set(PYTORCH_COMMIT v1.10.0)
     set(PYTORCH_COMPLETE ${CMAKE_BINARY_DIR}/CMakeFiles/pytorch-complete)
 
     if(USE_TORCH_CPU_ONLY)
@@ -802,7 +808,7 @@ if (USE_TORCH)
 
   # TORCH VISION
   message(STATUS "Configuring Pytorch Vision")
-  set(PYTORCH_VISION_COMMIT "v0.10.0") # 0.10.0 & torch 1.9.0
+  set(PYTORCH_VISION_COMMIT "v0.11.1") # 0.11.1 & torch 1.10.0
   set(PYTORCH_VISION_PATCHES_PATH ${CMAKE_BINARY_DIR}/patches/pytorch/vision)
   #set(PYTORCH_VISION_PATCHES
   #    ${PYTORCH_VISION_PATCHES_PATH}/xxx.patch # add patches here
@@ -1257,3 +1263,5 @@ message(STATUS "USE_XGBOOST:           ${USE_XGBOOST}")
 message(STATUS "USE_XGBOOST_CPU_ONLY:  ${USE_XGBOOST_CPU_ONLY}")
 message(STATUS "USE_TSNE:              ${USE_TSNE}")
 message(STATUS "USE_BOOST_BACKTRACE:   ${USE_BOOST_BACKTRACE}")
+message(STATUS "USE_CUDA_CV:           ${USE_CUDA_CV}")
+message(STATUS "OPENCV_VERSION:        ${OPENCV_VERSION}")
