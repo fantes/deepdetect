@@ -350,12 +350,19 @@ if (USE_TENSORRT)
     "resnet_onnx_trt.tar.gz"
     "resnet_onnx_trt"
     )
+#  DOWNLOAD_DATASET(
+#    "ONNX yolox model"
+#    "https://deepdetect.com/models/init/desktop/images/detection/yolox_onnx_trt.tar.gz"
+#    "examples/trt"
+#    "yolox_onnx_trt.tar.gz"
+#    "yolox_onnx_trt"
+#    )
   DOWNLOAD_DATASET(
-    "ONNX yolox model"
-    "https://deepdetect.com/models/init/desktop/images/detection/yolox_onnx_trt.tar.gz"
+    "ONNX yolox model without wrapper"
+    "https://deepdetect.com/models/init/desktop/images/detection/yolox_onnx_trt_nowrap.tar.gz"
     "examples/trt"
-    "yolox_onnx_trt.tar.gz"
-    "yolox_onnx_trt"
+    "yolox_onnx_trt_nowrap.tar.gz"
+    "yolox_onnx_trt_nowrap"
     )
   DOWNLOAD_DATASET(
     "ONNX CycleGAN model"
@@ -407,6 +414,13 @@ if (USE_TORCH)
     "fasterrcnn_train_torch"
     )
   DOWNLOAD_DATASET(
+    "Torchvision training YoloX Model"
+    "https://www.deepdetect.com/dd/examples/torch/yolox_train_torch.tar.gz"
+    "examples/torch"
+    "yolox_train_torch.tar.gz"
+    "yolox_train_torch"
+    )
+  DOWNLOAD_DATASET(
     "Torchvision inference DeepLabV3 Resnet50 model"
     "https://www.deepdetect.com/dd/examples/torch/deeplabv3_torch.tar.gz"
     "examples/torch"
@@ -419,6 +433,13 @@ if (USE_TORCH)
     "examples/torch"
     "deeplabv3_training_torch.tar.gz"
     "deeplabv3_training_torch"
+    )
+   DOWNLOAD_DATASET(
+    "Torch training Segformer model"
+    "https://www.deepdetect.com/dd/examples/torch/segformer_training_torch.tar.gz"
+    "examples/torch"
+    "segformer_training_torch.tar.gz"
+    "segformer_training_torch"
     )
   DOWNLOAD_DATASET(
     "Torch BERT classification test model"
