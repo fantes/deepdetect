@@ -1,6 +1,6 @@
 /**
  * DeepDetect
- * Copyright (c) 2021 Jolibrain SASU
+ * Copyright (c) 2021 Emmanuel Benazera
  * Author: Louis Jean <louis.jean@jolibrain.com>
  *
  * This file is part of deepdetect.
@@ -19,25 +19,26 @@
  * along with deepdetect.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "ddtypes.hpp"
+#ifndef VIDEOINPUTFILECONN_H
+#define VIDEOINPUTFILECONN_H
+
+#include "imginputfileconn.h"
+#include "dto/input_connector.hpp"
 
 namespace dd
 {
-  namespace DTO
+  class VideoInputFileConn : virtual public ImgInputFileConn
   {
-    namespace __class
+  public:
+    VideoInputFileConn() : ImgInputFileConn()
     {
-      const oatpp::ClassId GpuIdsClass::CLASS_ID("GpuIds");
-
-      template <>
-      const oatpp::ClassId DTOVectorClass<double>::CLASS_ID("vector<double>");
-
-      template <>
-      const oatpp::ClassId
-          DTOVectorClass<uint8_t>::CLASS_ID("vector<uint8_t>");
-
-      template <>
-      const oatpp::ClassId DTOVectorClass<bool>::CLASS_ID("vector<bool>");
     }
-  }
+    VideoInputFileConn(const VideoInputFileConn &i) : ImgInputFileConn(i)
+    {
+    }
+
+    ~VideoInputFileConn() override = default;
+  };
 }
+
+#endif

@@ -644,6 +644,9 @@ TEST(torchapi, service_train_images_split)
   ASSERT_TRUE(jd["body"]["measure"]["train_loss"].GetDouble() <= 3.0)
       << "loss";
 
+  ASSERT_TRUE(fileops::file_exists(resnet50_train_repo + "config.json"));
+  ASSERT_TRUE(fileops::file_exists(resnet50_train_repo + "model.json"));
+
   std::unordered_set<std::string> lfiles;
   fileops::list_directory(resnet50_train_repo, true, false, false, lfiles);
   for (std::string ff : lfiles)
@@ -691,7 +694,8 @@ TEST(torchapi, service_train_images)
           "\"resume\":false,\"mirror\":true,\"rotate\":true,\"crop_size\":224,"
           "\"cutout\":0.5,\"geometry\":{\"prob\":0.1,\"persp_horizontal\":"
           "true,\"persp_vertical\":true,\"zoom_in\":true,\"zoom_out\":true,"
-          "\"pad_mode\":1},\"noise\":{\"prob\":0.01},\"distort\":{\"prob\":0."
+          "\"pad_mode\":\"constant\"},\"noise\":{\"prob\":0.01},\"distort\":{"
+          "\"prob\":0."
           "01},\"dataloader_threads\":4}"
           ","
           "\"input\":{\"seed\":12345,\"db\":true,\"shuffle\":true},"
@@ -778,7 +782,8 @@ TEST(torchapi, service_train_image_segmentation_deeplabv3)
           "\"resume\":false,\"mirror\":true,\"rotate\":true,\"crop_size\":224,"
           "\"cutout\":0.5,\"geometry\":{\"prob\":0.1,\"persp_horizontal\":"
           "true,\"persp_vertical\":true,\"zoom_in\":true,\"zoom_out\":true,"
-          "\"pad_mode\":1},\"noise\":{\"prob\":0.01},\"distort\":{\"prob\":0."
+          "\"pad_mode\":\"constant\"},\"noise\":{\"prob\":0.01},\"distort\":{"
+          "\"prob\":0."
           "01}},"
           "\"input\":{\"seed\":12345,\"db\":true,\"shuffle\":true,"
           "\"segmentation\":true,\"scale\":0.0039,\"mean\":[0.485,0.456,0.406]"
@@ -863,7 +868,8 @@ TEST(torchapi, service_train_image_segmentation_deeplabv3_dice)
           "\"resume\":false,\"mirror\":true,\"rotate\":true,\"crop_size\":224,"
           "\"cutout\":0.5,\"geometry\":{\"prob\":0.1,\"persp_horizontal\":"
           "true,\"persp_vertical\":true,\"zoom_in\":true,\"zoom_out\":true,"
-          "\"pad_mode\":1},\"noise\":{\"prob\":0.01},\"distort\":{\"prob\":0."
+          "\"pad_mode\":\"constant\"},\"noise\":{\"prob\":0.01},\"distort\":{"
+          "\"prob\":0."
           "01}},"
           "\"input\":{\"seed\":12345,\"db\":true,\"shuffle\":true,"
           "\"segmentation\":true,\"scale\":0.0039,\"mean\":[0.485,0.456,0.406]"
@@ -946,7 +952,8 @@ TEST(torchapi, service_train_image_segmentation_segformer)
           "\"resume\":false,\"mirror\":true,\"rotate\":true,\"crop_size\":224,"
           "\"cutout\":0.5,\"geometry\":{\"prob\":0.1,\"persp_horizontal\":"
           "true,\"persp_vertical\":true,\"zoom_in\":true,\"zoom_out\":true,"
-          "\"pad_mode\":1},\"noise\":{\"prob\":0.01},\"distort\":{\"prob\":0."
+          "\"pad_mode\":\"constant\"},\"noise\":{\"prob\":0.01},\"distort\":{"
+          "\"prob\":0."
           "01}},"
           "\"input\":{\"seed\":12345,\"db\":true,\"shuffle\":true,"
           "\"segmentation\":true,\"scale\":0.0039,\"mean\":[0.485,0.456,0.406]"
@@ -961,7 +968,7 @@ TEST(torchapi, service_train_image_segmentation_segformer)
   ASSERT_EQ(201, jd["status"]["code"]);
 
   ASSERT_TRUE(jd["body"]["measure"]["meanacc"].GetDouble() <= 1) << "accuracy";
-  ASSERT_TRUE(jd["body"]["measure"]["meanacc"].GetDouble() >= 0.006)
+  ASSERT_TRUE(jd["body"]["measure"]["meanacc"].GetDouble() >= 0.003)
       << "accuracy good";
   ASSERT_TRUE(jd["body"]["measure"]["meaniou"].GetDouble() <= 1) << "meaniou";
 
@@ -1562,7 +1569,8 @@ TEST(torchapi, service_train_object_detection_fasterrcnn)
           "true,\"crop_size\":224,"
           "\"cutout\":0.1,\"geometry\":{\"prob\":0.1,\"persp_horizontal\":"
           "true,\"persp_vertical\":true,\"zoom_in\":true,\"zoom_out\":true,"
-          "\"pad_mode\":1},\"noise\":{\"prob\":0.01},\"distort\":{\"prob\":0."
+          "\"pad_mode\":\"constant\"},\"noise\":{\"prob\":0.01},\"distort\":{"
+          "\"prob\":0."
           "01}},\"input\":{\"seed\":12347,"
           "\"db\":true,\"shuffle\":true},\"output\":{\"measure\":[\"map\"]}},"
           "\"data\":[\""
@@ -1633,7 +1641,8 @@ TEST(torchapi, service_train_object_detection_yolox)
           "\"mirror\":true,\"rotate\":true,\"crop_size\":640,"
           "\"cutout\":0.1,\"geometry\":{\"prob\":0.1,\"persp_horizontal\":"
           "true,\"persp_vertical\":true,\"zoom_in\":true,\"zoom_out\":true,"
-          "\"pad_mode\":1},\"noise\":{\"prob\":0.01},\"distort\":{\"prob\":0."
+          "\"pad_mode\":\"constant\"},\"noise\":{\"prob\":0.01},\"distort\":{"
+          "\"prob\":0."
           "01}},\"input\":{\"seed\":12347,\"db\":true,"
           "\"shuffle\":true},\"output\":{\"measure\":[\"map\"]}},\"data\":[\""
         + fasterrcnn_train_data + "\",\"" + fasterrcnn_test_data + "\"]}";

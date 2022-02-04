@@ -79,10 +79,6 @@ namespace dd
     int _crop_size = -1;
     std::uniform_int_distribution<int> _uniform_int_crop_x;
     std::uniform_int_distribution<int> _uniform_int_crop_y;
-
-    // randomized params
-    int _crop_x = 0;
-    int _crop_y = 0;
   };
 
   class CutoutParams : public ImgAugParams
@@ -135,17 +131,27 @@ namespace dd
     GeometryParams(const float &prob, const bool &geometry_persp_horizontal,
                    const bool &geometry_persp_vertical,
                    const bool &geometry_zoom_out, const bool &geometry_zoom_in,
-                   const int &geometry_pad_mode)
+                   const std::string &geometry_pad_mode_str)
         : _prob(prob), _geometry_persp_horizontal(geometry_persp_horizontal),
           _geometry_persp_vertical(geometry_persp_vertical),
           _geometry_zoom_out(geometry_zoom_out),
-          _geometry_zoom_in(geometry_zoom_in),
-          _geometry_pad_mode(geometry_pad_mode)
+          _geometry_zoom_in(geometry_zoom_in)
     {
+      set_pad_mode(geometry_pad_mode_str);
     }
 
     ~GeometryParams()
     {
+    }
+
+    void set_pad_mode(const std::string &geometry_pad_mode_str)
+    {
+      if (geometry_pad_mode_str == "constant")
+        _geometry_pad_mode = 1;
+      else if (geometry_pad_mode_str == "mirrored")
+        _geometry_pad_mode = 2;
+      else if (geometry_pad_mode_str == "repeat_nearest")
+        _geometry_pad_mode = 3;
     }
 
     float _prob = 0.0;
@@ -279,6 +285,9 @@ namespace dd
     void augment_with_bbox(cv::Mat &src, std::vector<torch::Tensor> &targets);
     void augment_with_segmap(cv::Mat &src, cv::Mat &tgt);
 
+    void augment_test(cv::Mat &src);
+    void augment_test_with_segmap(cv::Mat &src, cv::Mat &tgt);
+
   protected:
     bool roll_weighted_dice(const float &prob);
     bool applyMirror(cv::Mat &src, const bool &sample = true);
@@ -288,8 +297,8 @@ namespace dd
     void applyRotateBBox(std::vector<std::vector<float>> &bboxes,
                          const float &img_width, const float &img_height,
                          const int &rot);
-    void applyCrop(cv::Mat &src, CropParams &cp,
-                   const bool &store_rparams = false);
+    bool applyCrop(cv::Mat &src, CropParams &cp, int &crop_x, int &crop_y,
+                   const bool &sample = true);
     void applyCutout(cv::Mat &src, CutoutParams &cp,
                      const bool &store_rparams = false);
     void applyGeometry(cv::Mat &src, GeometryParams &cp,

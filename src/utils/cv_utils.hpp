@@ -1,6 +1,6 @@
 /**
  * DeepDetect
- * Copyright (c) 2021 Jolibrain SASU
+ * Copyright (c) 2021 Jolibrain
  * Author: Louis Jean <louis.jean@jolibrain.com>
  *
  * This file is part of deepdetect.
@@ -19,25 +19,32 @@
  * along with deepdetect.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "ddtypes.hpp"
+#ifndef DD_UTILS_CVUTILS_HPP
+#define DD_UTILS_CVUTILS_HPP
+
+#include <vector>
 
 namespace dd
 {
-  namespace DTO
+  namespace cv_utils
   {
-    namespace __class
+    /** Convert an int fourcc (from a video) to string format */
+    std::string fourcc_to_string(int fourcc)
     {
-      const oatpp::ClassId GpuIdsClass::CLASS_ID("GpuIds");
-
-      template <>
-      const oatpp::ClassId DTOVectorClass<double>::CLASS_ID("vector<double>");
-
-      template <>
-      const oatpp::ClassId
-          DTOVectorClass<uint8_t>::CLASS_ID("vector<uint8_t>");
-
-      template <>
-      const oatpp::ClassId DTOVectorClass<bool>::CLASS_ID("vector<bool>");
+      union
+      {
+        int u32;
+        unsigned char c[4];
+      } i32_c;
+      i32_c.u32 = fourcc;
+      return cv::format(
+          "%c%c%c%c",
+          (i32_c.c[0] >= ' ' && i32_c.c[0] < 128) ? i32_c.c[0] : '?',
+          (i32_c.c[1] >= ' ' && i32_c.c[1] < 128) ? i32_c.c[1] : '?',
+          (i32_c.c[2] >= ' ' && i32_c.c[2] < 128) ? i32_c.c[2] : '?',
+          (i32_c.c[3] >= ' ' && i32_c.c[3] < 128) ? i32_c.c[3] : '?');
     }
   }
 }
+
+#endif // DD_UTILS_CVUTILS_HPP

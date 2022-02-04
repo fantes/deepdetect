@@ -620,13 +620,14 @@ namespace dd
         throw;
       }
 
-    // TODO: set inputc dataset data augmentation options
+    // set inputc dataset data augmentation options
     APIData ad_mllib = ad.getobj("parameters").getobj("mllib");
     if (typeid(inputc) == typeid(ImgTorchInputFileConn))
       {
         bool has_data_augmentation
             = ad_mllib.has("mirror") || ad_mllib.has("rotate")
-              || ad_mllib.has("crop_size") || ad_mllib.has("cutout");
+              || ad_mllib.has("crop_size") || ad_mllib.has("cutout")
+              || ad_mllib.has("geometry");
         if (has_data_augmentation)
           {
             bool has_mirror
@@ -670,8 +671,8 @@ namespace dd
                   geometry_params._geometry_zoom_in
                       = ad_geometry.get("zoom_in").get<bool>();
                 if (ad_geometry.has("pad_mode"))
-                  geometry_params._geometry_pad_mode
-                      = ad_geometry.get("pad_mode").get<int>();
+                  geometry_params.set_pad_mode(
+                      ad_geometry.get("pad_mode").get<std::string>());
               }
             auto *img_ic = reinterpret_cast<ImgTorchInputFileConn *>(&inputc);
             NoiseParams noise_params;
@@ -693,6 +694,10 @@ namespace dd
             inputc._dataset._img_rand_aug_cv = TorchImgRandAugCV(
                 has_mirror, has_rotate, crop_params, cutout_params,
                 geometry_params, noise_params, distort_params);
+            inputc._test_datasets.set_img_rand_aug_cv(TorchImgRandAugCV(
+                has_mirror, has_rotate, crop_params, cutout_params,
+                geometry_params, noise_params,
+                distort_params)); // only uses cropping if enable
           }
       }
     int dataloader_threads = 1;
@@ -1194,7 +1199,10 @@ namespace dd
                   }
 
                 if (elapsed_it == iterations)
-                  out = meas_out;
+                  {
+                    out.add("measure", meas_out.getobj("measure"));
+                    out.add("measures", meas_out.getv("measures"));
+                  }
               }
 
             train_loss = 0;
@@ -1264,6 +1272,7 @@ namespace dd
 
     inputc.response_params(out);
     this->_logger->info("Training done.");
+
     return 0;
   }
 
@@ -1578,7 +1587,7 @@ namespace dd
                         bbox[2]
                             = std::min(static_cast<double>(cols - 1), bbox[2]);
                         bbox[3]
-                            = std::min(static_cast<double>(cols - 1), bbox[3]);
+                            = std::min(static_cast<double>(rows - 1), bbox[3]);
 
                         APIData ad_bbox;
                         ad_bbox.add("xmin", bbox[0]);
@@ -1803,9 +1812,12 @@ namespace dd
 
     if (ad.has("chain") && ad.get("chain").get<bool>())
       {
-        if (typeid(inputc) == typeid(ImgTorchInputFileConn))
+        if (std::is_same<TInputConnectorStrategy,
+                         ImgTorchInputFileConn>::value)
           {
-            auto *img_ic = reinterpret_cast<ImgTorchInputFileConn *>(&inputc);
+            // can't do reinterpret_cast because virtual inheritance
+            InputConnectorStrategy *inputc_base = &inputc;
+            auto *img_ic = dynamic_cast<ImgTorchInputFileConn *>(inputc_base);
             APIData chain_input;
             if (!img_ic->_orig_images.empty())
               chain_input.add("imgs", img_ic->_orig_images);
@@ -1983,7 +1995,7 @@ namespace dd
             output = torch::softmax(output, 1);
             torch::Tensor target = batch.target.at(0).to(torch::kFloat64);
             torch::Tensor segmap
-                = torch::flatten(torch::argmax(output.squeeze(), 1))
+                = torch::flatten(torch::argmax(output.squeeze(), 0))
                       .contiguous()
                       .to(torch::kFloat64)
                       .to(cpu); // squeeze removes the batch size
@@ -2209,6 +2221,8 @@ namespace dd
   }
 
   template class TorchLib<ImgTorchInputFileConn, SupervisedOutput, TorchModel>;
+  template class TorchLib<VideoTorchInputFileConn, SupervisedOutput,
+                          TorchModel>;
   template class TorchLib<TxtTorchInputFileConn, SupervisedOutput, TorchModel>;
   template class TorchLib<CSVTSTorchInputFileConn, SupervisedOutput,
                           TorchModel>;

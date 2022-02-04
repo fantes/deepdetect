@@ -46,11 +46,20 @@ namespace dd
     applyCutout(src, _cutout_params);
 
     // these transforms do affect dimensions
-    applyCrop(src, _crop_params);
+    int crop_x = 0;
+    int crop_y = 0;
+    applyCrop(src, _crop_params, crop_x, crop_y);
     applyMirror(src);
     applyRotate(src);
     applyNoise(src);
     applyDistort(src);
+  }
+
+  void TorchImgRandAugCV::augment_test(cv::Mat &src)
+  {
+    int crop_x = 0;
+    int crop_y = 0;
+    applyCrop(src, _crop_params, crop_x, crop_y);
   }
 
   void
@@ -119,6 +128,13 @@ namespace dd
       applyGeometry(tgt, geoparams, false, false); // reuses geoparams
 
     applyCutout(src, _cutout_params);
+
+    int crop_x = 0;
+    int crop_y = 0;
+    bool cropped = applyCrop(src, _crop_params, crop_x, crop_y);
+    if (cropped)
+      applyCrop(tgt, _crop_params, crop_x, crop_y, false);
+
     bool mirrored = applyMirror(src);
     if (mirrored)
       applyMirror(tgt, false);
@@ -127,6 +143,15 @@ namespace dd
       applyRotate(tgt, false, rot);
     applyNoise(src);
     applyDistort(src);
+  }
+
+  void TorchImgRandAugCV::augment_test_with_segmap(cv::Mat &src, cv::Mat &tgt)
+  {
+    int crop_x = 0;
+    int crop_y = 0;
+    bool cropped = applyCrop(src, _crop_params, crop_x, crop_y);
+    if (cropped)
+      applyCrop(tgt, _crop_params, crop_x, crop_y, false);
   }
 
   bool TorchImgRandAugCV::roll_weighted_dice(const float &prob)
@@ -247,28 +272,24 @@ namespace dd
     bboxes = nbboxes;
   }
 
-  void TorchImgRandAugCV::applyCrop(cv::Mat &src, CropParams &cp,
-                                    const bool &store_rparams)
+  bool TorchImgRandAugCV::applyCrop(cv::Mat &src, CropParams &cp, int &crop_x,
+                                    int &crop_y, const bool &sample)
   {
     if (cp._crop_size <= 0)
-      return;
+      return false;
 
-    int crop_x = 0;
-    int crop_y = 0;
+    if (sample)
+      {
 #pragma omp critical
-    {
-      crop_x = cp._uniform_int_crop_x(_rnd_gen);
-      crop_y = cp._uniform_int_crop_y(_rnd_gen);
-    }
+        {
+          crop_x = cp._uniform_int_crop_x(_rnd_gen);
+          crop_y = cp._uniform_int_crop_y(_rnd_gen);
+        }
+      }
     cv::Rect crop(crop_x, crop_y, cp._crop_size, cp._crop_size);
     cv::Mat dst = src(crop).clone();
     src = dst;
-
-    if (store_rparams)
-      {
-        cp._crop_x = crop_x;
-        cp._crop_y = crop_y;
-      }
+    return true;
   }
 
   void TorchImgRandAugCV::applyCutout(cv::Mat &src, CutoutParams &cp,

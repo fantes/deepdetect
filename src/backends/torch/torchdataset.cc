@@ -160,11 +160,11 @@ namespace dd
   {
     // serialize image
     std::ostringstream dstream;
-    image_to_stringstream(bgr, dstream, true);
+    image_to_stringstream(bgr, dstream, false);
 
     // serialize target
     std::ostringstream tstream;
-    image_to_stringstream(bw_target, tstream, false);
+    image_to_stringstream(bw_target, tstream, true);
 
     write_image_to_db(dstream, tstream, bgr.rows, bgr.cols);
   }
@@ -242,17 +242,9 @@ namespace dd
 
         if (_segmentation)
           {
-
             cv::resize(bw_target, bw_target, cv::Size(width, height), 0, 0,
                        cv::INTER_NEAREST);
           }
-      }
-
-    if (_segmentation)
-      {
-        at::Tensor targett_seg
-            = image_to_tensor(bw_target, height, width, true);
-        targett.push_back(targett_seg);
       }
   }
 
@@ -410,7 +402,7 @@ namespace dd
         if (!_lfiles.empty()) // prefetch batch from file list
           {
             ImgTorchInputFileConn *inputc
-                = reinterpret_cast<ImgTorchInputFileConn *>(_inputc);
+                = dynamic_cast<ImgTorchInputFileConn *>(_inputc);
             bool first_iter = true;
 
             for (int64_t id : ids)
@@ -534,7 +526,7 @@ namespace dd
             else
               {
                 ImgTorchInputFileConn *inputc
-                    = reinterpret_cast<ImgTorchInputFileConn *>(_inputc);
+                    = dynamic_cast<ImgTorchInputFileConn *>(_inputc);
 
                 cv::Mat bgr, bw_target;
                 read_image_from_db(datas, targets, bgr, t, bw_target,
@@ -547,21 +539,31 @@ namespace dd
                     if (_bbox)
                       _img_rand_aug_cv.augment_with_bbox(bgr, t);
                     else if (_segmentation)
-                      {
-                        _img_rand_aug_cv.augment_with_segmap(bgr, bw_target);
-                      }
+                      _img_rand_aug_cv.augment_with_segmap(bgr, bw_target);
                     else
                       _img_rand_aug_cv.augment(bgr);
                   }
+                else
+                  {
+                    // cropping requires test set 'augmentation'
+                    if (_bbox)
+                      {
+                        // no cropping yet with bboxes
+                      }
+                    if (_segmentation)
+                      _img_rand_aug_cv.augment_test_with_segmap(bgr,
+                                                                bw_target);
+                    else
+                      _img_rand_aug_cv.augment_test(bgr);
+                  }
 
-                torch::Tensor imgt
-                    = image_to_tensor(bgr, inputc->height(), inputc->width());
+                torch::Tensor imgt = image_to_tensor(bgr, bgr.rows, bgr.cols);
                 d.push_back(imgt);
 
                 if (_segmentation)
                   {
                     at::Tensor targett_seg = image_to_tensor(
-                        bw_target, inputc->height(), inputc->width(), true);
+                        bw_target, bw_target.rows, bw_target.cols, true);
                     t.push_back(targett_seg);
                   }
               }
@@ -650,12 +652,15 @@ namespace dd
                                     const bool &target)
   {
     ImgTorchInputFileConn *inputc
-        = reinterpret_cast<ImgTorchInputFileConn *>(_inputc);
+        = dynamic_cast<ImgTorchInputFileConn *>(_inputc);
 
     DDImg dimg;
     inputc->copy_parameters_to(dimg);
     if (target) // used for segmentation masks
-      dimg._bw = true;
+      {
+        dimg._bw = true;
+        dimg._interp = "nearest";
+      }
 
     try
       {
@@ -712,9 +717,10 @@ namespace dd
       return res;
     cv::Mat img_tgt;
     res = read_image_file(fname_target, img_tgt, true);
+
     if (res != 0)
       return res;
-    add_image_batch(img, height, width, img_tgt);
+    add_image_batch(img, width, height, img_tgt);
     return res;
   }
 
@@ -724,7 +730,7 @@ namespace dd
   {
     // read image before reading bboxes to get the size of the image
     ImgTorchInputFileConn *inputc
-        = reinterpret_cast<ImgTorchInputFileConn *>(_inputc);
+        = dynamic_cast<ImgTorchInputFileConn *>(_inputc);
 
     DDImg dimg;
     inputc->copy_parameters_to(dimg);
@@ -792,7 +798,7 @@ namespace dd
                                            const bool &target)
   {
     ImgTorchInputFileConn *inputc
-        = reinterpret_cast<ImgTorchInputFileConn *>(_inputc);
+        = dynamic_cast<ImgTorchInputFileConn *>(_inputc);
 
     std::vector<int64_t> sizes{ height, width, bgr.channels() };
     at::TensorOptions options(at::ScalarType::Byte);
@@ -833,8 +839,6 @@ namespace dd
 
     return imgt;
   }
-
-  // TODO: segmentation target image to tensor
 
   at::Tensor TorchDataset::target_to_tensor(const int &target)
   {
