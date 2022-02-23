@@ -548,9 +548,9 @@ namespace dd
                     // cropping requires test set 'augmentation'
                     if (_bbox)
                       {
-                        // no cropping yet with bboxes
+                        _img_rand_aug_cv.augment_test_with_bbox(bgr, t);
                       }
-                    if (_segmentation)
+                    else if (_segmentation)
                       _img_rand_aug_cv.augment_test_with_segmap(bgr,
                                                                 bw_target);
                     else
@@ -785,6 +785,16 @@ namespace dd
         bbox[3] = std::stod(val) * hfactor;
         // using target_to_tensor<std::vector<double>> (used by regression)
         bboxes.push_back(target_to_tensor(bbox));
+      }
+
+    // allow for no bbox (pure negative sample) with an empty tensor
+    // XXX: yolox only, that discards 0 boxes internally
+    if (bboxes.empty())
+      {
+        std::vector<double> empty_bbox = { 0.0, 0.0, 0.0, 0.0 };
+        bboxes.push_back(target_to_tensor(empty_bbox));
+        int cls = 0;
+        classes.push_back(target_to_tensor(cls));
       }
 
     // add image
