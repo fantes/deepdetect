@@ -134,6 +134,7 @@ if (BUILD_PROTOBUF)
     ExternalProject_Add(
         protobuf
         PREFIX protobuf
+        UPDATE_DISCONNECTED 1
         URL https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOBUF_VERSION}/protobuf-cpp-${PROTOBUF_VERSION}.tar.gz
         URL_HASH SHA256=ba4bbc3e6b58d2ccfe406e616576ef48710a2aae205f463618025fc691549cfe
         SOURCE_SUBDIR cmake
@@ -204,6 +205,7 @@ include_directories("${EIGEN3_INCLUDE_DIR}")
 if (BUILD_SPDLOG)
     ExternalProject_Add(
         spdlog
+        UPDATE_DISCONNECTED 1
         PREFIX spdlog
         URL https://github.com/gabime/spdlog/archive/v1.8.2.tar.gz
         URL_HASH SHA256=e20e6bd8f57e866eaf25a5417f0a38a116e537f1a77ac7b5409ca2b180cec0d5
@@ -642,10 +644,13 @@ elseif(USE_CAFFE)
 
   message(STATUS "include_dirs : ${INCLUDE_DIRS}")
 
+  set(CAFFE_DD_TARBALL_HASH "bf2d6dab6bc187be349377f4baa97f867c6044186d7ad85cd72a56cd1ad30e35")
+
   ExternalProject_Add(
     caffe_dd
     PREFIX caffe_dd
     URL https://github.com/${CAFFE_DD_USER}/caffe/archive/${CAFFE_DD_BRANCH}.tar.gz
+    URL_HASH SHA256=${CAFFE_DD_TARBALL_HASH}
     CONFIGURE_COMMAND
         sh -c "\
             diff ${CMAKE_BINARY_DIR}/caffe_dd/src/caffe_dd/.build_release/src/caffe/proto/caffe.pb.cc ${CMAKE_CURRENT_BINARY_DIR}/src/caffe.pb.cc > /dev/null 2>&1 \
@@ -741,7 +746,7 @@ if (USE_NCNN)
       PREFIX ncnn
       URL https://github.com/Tencent/ncnn/releases/download/${NCNN_VERSION}/ncnn-${NCNN_VERSION}-full-source.zip
       URL_HASH SHA256=${NCNN_TARBALL_HASH}
-      PATCH_COMMAND ${CMAKE_SOURCE_DIR}/cmake/patches-apply.sh ${NCNN_PATCHES}
+      PATCH_COMMAND  ${CMAKE_SOURCE_DIR}/cmake/patches-apply.sh ${NCNN_PATCHES}
       CMAKE_ARGS ${NCNN_BUILD_FLAGS}
       INSTALL_COMMAND ""
       )
@@ -788,7 +793,7 @@ if (USE_TORCH)
       PATCH_COMMAND "" test -f ${PYTORCH_COMPLETE} && echo Skipping || git apply ${PYTORCH_PATCHES} && echo Applying ${PYTORCH_PATCHES}
       CONFIGURE_COMMAND ""
       BUILD_COMMAND ""
-      COMMAND test -f ${PYTORCH_COMPLETE} && echo Skipping || ${CMAKE_COMMAND} -E env PATH=${PROTOBUF_LIB_DIR}:$ENV{PATH} BUILD_CUSTOM_PROTOBUF=0 GLIBCXX_USE_CXX11_ABI=1 BUILD_TEST=0 USE_CUDA=${PYTORCH_USE_CUDA}  BUILD_CAFFE2=1 BUILD_CAFFE2_OPS=1 BUILD_CAFFE2_MOBILE=0 USE_DDLOG=1 USE_TENSORRT=0 CAFFE2_LINK_LOCAL_PROTOBUF=0 "CMAKE_CXX_FLAGS=-isystem ${SPDLOG_INCLUDE_DIR} -isystem ${PROTOBUF_INCLUDE_DIR}" "CMAKE_CUDA_FLAGS=-isystem ${SPDLOG_INCLUDE_DIR} -isystem ${PROTOBUF_INCLUDE_DIR}" CMAKE_PREFIX_PATH=${PROTOBUF_LIB_DIR}/cmake MAX_JOBS=8 python3 ../pytorch/tools/build_libtorch.py
+      COMMAND test -f ${PYTORCH_COMPLETE} && echo Skipping || ${CMAKE_COMMAND} -E env PATH=${PROTOBUF_LIB_DIR}:$ENV{PATH} BUILD_CUSTOM_PROTOBUF=0 GLIBCXX_USE_CXX11_ABI=1 BUILD_TEST=0 USE_CUDA=${PYTORCH_USE_CUDA}  BUILD_CAFFE2=1 BUILD_CAFFE2_OPS=1 BUILD_CAFFE2_MOBILE=0 USE_DDLOG=1 USE_TENSORRT=0 CAFFE2_LINK_LOCAL_PROTOBUF=0 "CMAKE_CXX_FLAGS=-isystem ${SPDLOG_INCLUDE_DIR} -isystem ${PROTOBUF_INCLUDE_DIR}" "CMAKE_CUDA_FLAGS=-isystem ${SPDLOG_INCLUDE_DIR} -isystem ${PROTOBUF_INCLUDE_DIR}  ${CUDA_ARCH}" CMAKE_PREFIX_PATH=${PROTOBUF_LIB_DIR}/cmake MAX_JOBS=8 python3 ../pytorch/tools/build_libtorch.py
       INSTALL_COMMAND ""
       DEPENDS spdlog protobuf
     )
@@ -822,7 +827,7 @@ if (USE_TORCH)
       -DWITH_CUDA=${PYTORCH_USE_CUDA} -DCMAKE_PREFIX_PATH=${TORCH_LOCATION} -DCMAKE_INSTALL_PREFIX=${TORCHVISION_LOCATION}
       -DCMAKE_INCLUDE_PATH=${PROTOBUF_INCLUDE_DIR} -DCMAKE_LIBRARY_PATH=${PROTOBUF_LIB_DIR}
       "-DCMAKE_CXX_FLAGS=-isystem ${CMAKE_BINARY_DIR}/pytorch/src/pytorch/ -isystem ${SPDLOG_INCLUDE_DIR} -isystem ${PROTOBUF_INCLUDE_DIR}"
-      "-DCMAKE_CUDA_FLAGS=-isystem ${CMAKE_BINARY_DIR}/pytorch/src/pytorch/ -isystem ${SPDLOG_INCLUDE_DIR} -isystem ${PROTOBUF_INCLUDE_DIR}"
+      "-DCMAKE_CUDA_FLAGS=-isystem ${CMAKE_BINARY_DIR}/pytorch/src/pytorch/ -isystem ${SPDLOG_INCLUDE_DIR} -isystem ${PROTOBUF_INCLUDE_DIR} ${CUDA_ARCH}"
       "-DCMAKE_CUDA_STANDARD=14"
       -DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc)
 
@@ -887,6 +892,7 @@ if (USE_XGBOOST)
       GIT_REPOSITORY https://github.com/dmlc/xgboost.git
       GIT_TAG 84d992babcc370bff6cf4fe89985f072b0b91a64
       GIT_CONFIG advice.detachedHead=false
+      UPDATE_DISCONNECTED 1
       PATCH_COMMAND
         git reset --hard &&
         patch -p1 < ${CMAKE_SOURCE_DIR}/patches/xgboost/static-lib.patch &&
@@ -905,6 +911,7 @@ if (USE_TSNE)
   ExternalProject_Add(
       Multicore-TSNE
       PREFIX Multicore-TSNE
+      UPDATE_DISCONNECTED 1
       GIT_REPOSITORY https://github.com/beniz/Multicore-TSNE.git
       SOURCE_SUBDIR multicore_tsne
       CMAKE_ARGS -Wno-dev
@@ -1014,6 +1021,7 @@ set(OATPP_ZLIB_VERSION "1.2.5")
 ExternalProject_Add(
     oatpp
     PREFIX oatpp
+    UPDATE_DISCONNECTED 1
     URL https://github.com/oatpp/oatpp/archive/${OATPP_VERSION}.tar.gz
     URL_HASH SHA256=36276e8b23e68ece1e6093c3f06fc80e3d42a5f4e47cdeef5e7e63f36eeddaad
     BUILD_IN_SOURCE true
