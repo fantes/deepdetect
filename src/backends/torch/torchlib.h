@@ -109,6 +109,8 @@ namespace dd
     bool _timeserie = false;      /**< select timeserie type problem */
     bool _bbox = false;           /**< select detection type problem */
     bool _segmentation = false;   /**< select segmentation type problem */
+    bool _ctc = false;            /**< select OCR type problem */
+    bool _multi_label = false;    /**< whether model outputs multiple labels */
     std::string _loss = "";       /**< selected loss*/
     double _reg_weight
         = 1; /**< for detection models, weight for bbox regression loss. */

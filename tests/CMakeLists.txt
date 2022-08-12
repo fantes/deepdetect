@@ -247,10 +247,11 @@ if (USE_CAFFE)
   if (USE_JSON_API)
     REGISTER_TEST(ut_caffeapi ut-caffeapi.cc)
   endif()
-  if (USE_HTTP_SERVER_OATPP)
-    REGISTER_TEST(ut_oatpp ut-oatpp.cc ut-oatpp.h)
-    target_link_libraries(ut_oatpp ${OATPP_LIB_DEPS} ${CMAKE_BINARY_DIR}/oatpp/src/oatpp/src/liboatpp-test.a)
-  endif()
+endif()
+
+if (USE_HTTP_SERVER_OATPP)
+  REGISTER_TEST(ut_oatpp ut-oatpp.cc ut-oatpp.h)
+  target_link_libraries(ut_oatpp ${OATPP_LIB_DEPS} ${CMAKE_BINARY_DIR}/oatpp/src/oatpp/src/liboatpp-test.a)
 endif()
 
 if (USE_TF)
@@ -429,11 +430,18 @@ if (USE_TORCH)
   #   "fasterrcnn_train_torch"
   #   )
   DOWNLOAD_DATASET(
-    "Torchvision training YoloX Model"
+    "Torch training YoloX Model"
     "https://www.deepdetect.com/dd/examples/torch/yolox_train_torch.tar.gz"
     "examples/torch"
     "yolox_train_torch.tar.gz"
     "yolox_train_torch"
+    )
+  DOWNLOAD_DATASET(
+    "Torchvision training Resnet18 backbone for OCR"
+    "https://www.deepdetect.com/dd/examples/torch/resnet18_training_torch_ocr.tar.gz"
+    "examples/torch"
+    "resnet18_training_torch_ocr.tar.gz"
+    "resnet18_training_torch_ocr"
     )
   DOWNLOAD_DATASET(
     "Torchvision inference DeepLabV3 Resnet50 model"

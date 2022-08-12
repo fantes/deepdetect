@@ -81,6 +81,8 @@ namespace dd
     _timeserie = tl._timeserie;
     _bbox = tl._bbox;
     _segmentation = tl._segmentation;
+    _ctc = tl._ctc;
+    _multi_label = tl._multi_label;
     _loss = tl._loss;
     _template_params = tl._template_params;
     _dtype = tl._dtype;
@@ -184,11 +186,11 @@ namespace dd
 
     if (mllib_dto->from_repository != nullptr)
       {
-        this->_mlmodel.copy_to_target(mllib_dto->from_repository->std_str(),
+        this->_mlmodel.copy_to_target(mllib_dto->from_repository,
                                       this->_mlmodel._repo, this->_logger);
         this->_mlmodel.read_from_repository(this->_logger);
       }
-    _template = mllib_dto->model_template->std_str();
+    _template = mllib_dto->model_template;
 
     if (mllib_dto->gpu && !torch::cuda::is_available())
       {
@@ -207,22 +209,24 @@ namespace dd
         _nclasses = mllib_dto->ntargets;
       }
 
-    std::string self_supervised = mllib_dto->self_supervised->std_str();
+    std::string self_supervised = mllib_dto->self_supervised;
     int embedding_size = mllib_dto->embedding_size;
     bool freeze_traced = mllib_dto->freeze_traced;
     _finetuning = mllib_dto->finetuning;
-    _loss = mllib_dto->loss->std_str();
+    _loss = mllib_dto->loss;
 
     auto template_params_dto = mllib_dto->template_params;
     if (template_params_dto != nullptr)
       {
         _template_params = lib_ad.getobj("template_params");
-        if (mllib_dto->nclasses != 0)
-          _template_params.add("nclasses",
-                               static_cast<int>(mllib_dto->nclasses));
       }
+    if (mllib_dto->nclasses != 0)
+      _template_params.add("nclasses", static_cast<int>(mllib_dto->nclasses));
+    if (mllib_dto->timesteps > 0)
+      _template_params.add("timesteps",
+                           static_cast<int>(mllib_dto->timesteps));
 
-    std::string dt = mllib_dto->datatype->std_str();
+    std::string dt = mllib_dto->datatype;
     if (dt == "fp32")
       {
         _dtype = torch::kFloat32;
@@ -240,6 +244,8 @@ namespace dd
       }
     else
       throw MLLibBadParamException("unknown datatype " + dt);
+
+    _module._dtype = _dtype;
 
     // Find GPU id
     if (mllib_dto->gpu != true)
@@ -277,6 +283,10 @@ namespace dd
       {
         _segmentation = true;
       }
+    else if (mllib_dto->ctc || this->_inputc._ctc)
+      {
+        _ctc = true;
+      }
     else if (mllib_dto->nclasses != 0)
       {
         _classification = true;
@@ -284,6 +294,11 @@ namespace dd
     else if (mllib_dto->ntargets != 0)
       {
         _regression = true;
+      }
+
+    if (mllib_dto->multi_label)
+      {
+        _multi_label = true;
       }
 
     if (_template == "bert")
@@ -316,12 +331,16 @@ namespace dd
         _bbox = true;
         _classification = false;
       }
+    else if (_template.find("crnn") != std::string::npos)
+      {
+        _ctc = true;
+      }
     else if (_template.find("recurrent") != std::string::npos
              || NativeFactory::is_timeserie(_template))
       {
         _timeserie = true;
       }
-    if (!_regression && !_timeserie && !_bbox && !_segmentation
+    if (!_regression && !_timeserie && !_bbox && !_segmentation && !_ctc
         && self_supervised.empty())
       _classification = true; // classification is default
 
@@ -336,6 +355,10 @@ namespace dd
       this->_mltype = "classification";
     else if (_segmentation)
       this->_mltype = "segmentation";
+    else if (_ctc)
+      this->_mltype = "ctc";
+
+    this->_logger->info("mlltype={}", this->_mltype);
 
     // Create the model
     _module._device = _main_device;
@@ -374,7 +397,7 @@ namespace dd
         = ((!this->_mlmodel._traced.empty() || !this->_mlmodel._proto.empty())
            + NativeFactory::valid_template_def(_template))
           > 1;
-    if (multiple_models_found)
+    if (multiple_models_found && !_ctc)
       {
         this->_logger->error("traced: {}, proto: {}, template: {}",
                              this->_mlmodel._traced, this->_mlmodel._proto,
@@ -392,8 +415,8 @@ namespace dd
         // No allocation, use traced model in repo
         if (_classification)
           {
-            _module._linear = nn::Linear(embedding_size, _nclasses);
-            _module._linear->to(_main_device);
+            _module._linear_head = nn::Linear(embedding_size, _nclasses);
+            _module._linear_head->to(_main_device);
             _module._hidden_states = true;
             _module._linear_in = 1;
           }
@@ -417,13 +440,13 @@ namespace dd
     else if (!_template.empty())
       {
         bool model_allocated_at_train = NativeFactory::is_timeserie(_template)
+                                        || NativeFactory::is_ctc(_template)
                                         || _template == "recurrent";
 
         if (model_allocated_at_train)
           this->_logger->info("Model allocated during training");
         else if (NativeFactory::valid_template_def(_template))
           {
-
             _module.create_native_template<TInputConnectorStrategy>(
                 _template, _template_params, this->_inputc, this->_mlmodel,
                 _main_device);
@@ -448,8 +471,17 @@ namespace dd
 
         if (_finetuning && !_module._native)
           {
-            _module._require_linear_layer = true;
+            _module._require_linear_head = true;
             this->_logger->info("Add linear layer on top of the traced model");
+          }
+      }
+    else if (_ctc)
+      {
+        if (_finetuning && !this->_mlmodel._traced.empty())
+          {
+            _module._linear_in = 0;
+            _module._require_crnn_head = true;
+            this->_logger->info("Add CRNN head on top of the traced model");
           }
       }
 
@@ -760,8 +792,8 @@ namespace dd
       _loss = _template;
 
     TorchLoss tloss(_loss, _module.has_model_loss(), _seq_training, _timeserie,
-                    _regression, _classification, _segmentation, class_weights,
-                    _reg_weight, _module, this->_logger);
+                    _regression, _classification, _segmentation, _ctc,
+                    class_weights, _reg_weight, _module, this->_logger);
     TorchSolver tsolver(_module, tloss, this->_logger);
 
     // logging parameters
@@ -845,8 +877,8 @@ namespace dd
             r.module->train();
             r.loss = std::make_shared<TorchLoss>(
                 _loss, r.module->has_model_loss(), _seq_training, _timeserie,
-                _regression, _classification, _segmentation, class_weights,
-                _reg_weight, *r.module, this->_logger);
+                _regression, _classification, _segmentation, _ctc,
+                class_weights, _reg_weight, *r.module, this->_logger);
           }
       }
     _module.train();
@@ -944,13 +976,15 @@ namespace dd
                     throw MLLibInternalException(
                         "Batch " + std::to_string(batch_id) + ": no target");
                   }
-                Tensor y = batch.target.at(0).to(device);
+                std::vector<Tensor> targets;
+                for (auto target : batch.target)
+                  targets.push_back(target.to(device));
 
                 // Prediction
                 out_val = rank_module.forward(in_vals);
 
                 // Compute loss
-                Tensor loss = rank_tloss.loss(out_val, y, in_vals);
+                Tensor loss = rank_tloss.loss(out_val, targets, in_vals);
 
                 if (loss_divider != 1)
                   loss = loss / loss_divider;
@@ -1321,14 +1355,14 @@ namespace dd
     auto mllib_params = params->mllib;
 
     int64_t predict_batch_size = mllib_params->net->test_batch_size;
-    std::string extract_layer = mllib_params->extract_layer->std_str();
+    std::string extract_layer = mllib_params->extract_layer;
 
     bool extract_last = false;
     if (extract_layer == "last")
       extract_last = true;
-    std::string forward_method = mllib_params->forward_method->std_str();
+    std::string forward_method = mllib_params->forward_method;
 
-    std::string dt = mllib_params->datatype->std_str();
+    std::string dt = mllib_params->datatype;
     if (dt == "fp32")
       _dtype = torch::kFloat32;
     else if (dt == "fp16")
@@ -1343,12 +1377,14 @@ namespace dd
     else
       throw MLLibBadParamException("unknown datatype " + dt);
 
-    // TODO add a comment on the PR
     bool bbox = output_params->bbox;
+    bool ctc = output_params->ctc;
     double confidence_threshold = output_params->confidence_threshold;
 
     int best_count = _nclasses;
-    if (output_params->best != nullptr)
+    if (ctc) // ctc = only one result
+      best_count = 1;
+    else if (output_params->best != nullptr)
       best_count = output_params->best;
 
     int best_bbox = output_params->best_bbox;
@@ -1357,7 +1393,7 @@ namespace dd
     if (output_params->confidences != nullptr)
       {
         for (oatpp::String conf : *output_params->confidences)
-          confidences.push_back(conf->std_str());
+          confidences.push_back(conf);
       }
 
     bool lstm_continuation = input_params->continuation;
@@ -1467,8 +1503,17 @@ namespace dd
                     output = torch::stack(outputs);
                   }
 
-                if (extract_layer.empty() && _classification && !_timeserie)
-                  output = torch::softmax(output, 1).to(cpu);
+                // XXX: why is (!_timeserie) needed here? Aren't _timeserie and
+                // _classification mutually exclusive?
+                if (extract_layer.empty() && !_timeserie && _classification)
+                  {
+                    if (_multi_label)
+                      output = torch::sigmoid(output).to(cpu);
+                    else
+                      output = torch::softmax(output, 1).to(cpu);
+                  }
+                else if (extract_layer.empty() && !_timeserie && ctc)
+                  output = torch::softmax(output, 2).to(cpu);
                 else
                   output = output.to(cpu);
               }
@@ -1601,6 +1646,46 @@ namespace dd
                     results_ad.add("probs", probs);
                     results_ad.add("cats", cats);
                     results_ad.add("bboxes", bboxes);
+                    results_ads.push_back(results_ad);
+                  }
+              }
+            else if (ctc)
+              {
+                int timestep = output.size(0);
+                std::tuple<Tensor, Tensor> sorted_output
+                    = output.sort(2, true);
+                auto probs_acc
+                    = std::get<0>(sorted_output).accessor<float, 3>();
+                auto indices_acc
+                    = std::get<1>(sorted_output).accessor<int64_t, 3>();
+
+                for (int i = 0; i < output.size(1); ++i)
+                  {
+                    std::vector<int> pred_label_seq;
+                    int prev = output_params->blank_label;
+                    float prob = 1;
+
+                    for (int j = 0; j < timestep; ++j)
+                      {
+                        int cur = indices_acc[j][i][0];
+                        if (cur != prev && cur != output_params->blank_label)
+                          pred_label_seq.push_back(cur);
+                        prev = cur;
+                        prob *= probs_acc[j][i][0];
+                      }
+
+                    std::ostringstream oss;
+                    for (int l : pred_label_seq)
+                      oss << char(
+                          std::atoi(this->_mlmodel.get_hcorresp(l).c_str()));
+
+                    APIData results_ad;
+                    results_ad.add("uri", inputc._uris.at(results_ads.size()));
+                    results_ad.add("loss", 0.0);
+                    results_ad.add("cats",
+                                   std::vector<std::string>{ oss.str() });
+                    results_ad.add("probs", std::vector<double>{ prob });
+                    results_ad.add("nclasses", (int)_nclasses);
                     results_ads.push_back(results_ad);
                   }
               }
@@ -1910,7 +1995,6 @@ namespace dd
         Tensor labels;
         if (_timeserie)
           {
-
             if (_module._native != nullptr)
               output = _module._native->cleanup_output(output);
             // iterate over data in batch
@@ -1982,6 +2066,52 @@ namespace dd
                     targ_labels.index({ torch::indexing::Slice(start, stop) }),
                     bboxes_tensor, labels_tensor, score_tensor);
                 ad_bbox.add(std::to_string(entry_id), vbad);
+                ++entry_id;
+              }
+          }
+        else if (_ctc)
+          {
+            output = torch::softmax(output, 2).to(cpu);
+            std::tuple<Tensor, Tensor> sorted_output = output.sort(2, true);
+            auto indices_acc
+                = std::get<1>(sorted_output).accessor<int64_t, 3>();
+            at::Tensor target = batch.target.at(0).to(cpu);
+            at::Tensor target_length = batch.target.at(1).to(cpu);
+            int blank_label = 0;
+            int timestep = output.size(0);
+
+            for (int i = 0; i < output.size(1); ++i)
+              {
+                // compute best sequence
+                std::vector<int64_t> pred_label_seq;
+                int prev = blank_label;
+
+                for (int j = 0; j < timestep; ++j)
+                  {
+                    int cur = indices_acc[j][i][0];
+                    if (cur != prev && cur != blank_label)
+                      pred_label_seq.push_back(cur);
+                    prev = cur;
+                  }
+
+                // compare to target
+                torch::Tensor pred_tensor = torch::from_blob(
+                    pred_label_seq.data(), pred_label_seq.size(),
+                    at::TensorOptions(at::ScalarType::Long));
+                torch::Tensor targ_tensor = target.index(
+                    { i, torch::indexing::Slice(
+                             0, target_length[i].item<int>()) });
+
+                std::vector<double> pred_vec;
+                if (torch::equal(pred_tensor, targ_tensor))
+                  pred_vec = { 1.0, 0.0 };
+                else
+                  pred_vec = { 0.0, 1.0 };
+
+                APIData bad;
+                bad.add("pred", pred_vec);
+                bad.add("target", 0.0);
+                ad_res.add(std::to_string(entry_id), bad);
                 ++entry_id;
               }
           }

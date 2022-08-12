@@ -71,6 +71,12 @@ namespace dd
       };
       DTO_FIELD(Boolean, segmentation) = false;
 
+      DTO_FIELD_INFO(ctc)
+      {
+        info->description = "whether the model type is ctc";
+      };
+      DTO_FIELD(Boolean, ctc) = false;
+
       DTO_FIELD_INFO(from_repository)
       {
         info->description = "initialize model repository with checkpoint and "
@@ -154,6 +160,13 @@ namespace dd
       };
       DTO_FIELD(String, loss) = "";
 
+      DTO_FIELD_INFO(timesteps)
+      {
+        info->description
+            = "Number of output timesteps eg for ctc. -1 for auto mode.";
+      }
+      DTO_FIELD(Int32, timesteps) = -1;
+
       // TODO template parameters depends on the template, so the DTO must be
       // custom
       DTO_FIELD_INFO(template_params)
@@ -162,6 +175,13 @@ namespace dd
                             "are listed in the Model Templates section.";
       };
       DTO_FIELD(UnorderedFields<Any>, template_params);
+
+      DTO_FIELD_INFO(multi_label)
+      {
+        info->description
+            = "Model outputs an independent score for each class";
+      }
+      DTO_FIELD(Boolean, multi_label) = false;
 
       // Libtorch predict options
       DTO_FIELD_INFO(forward_method)

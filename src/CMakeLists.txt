@@ -90,6 +90,8 @@ if (USE_TORCH)
     backends/torch/torchinputconns.cc
     backends/torch/native/templates/nbeats.cc
     backends/torch/native/templates/vit.cc
+    backends/torch/native/templates/crnn_head.cc
+    backends/torch/native/templates/crnn.cc
     backends/torch/native/templates/visformer.cc
     backends/torch/native/templates/ttransformer.cc
     backends/torch/native/templates/ttransformer/tembedder.cc
@@ -174,7 +176,10 @@ if (USE_HTTP_SERVER)
     add_dependencies(ddetect cpp-netlib)
 endif()
 if (USE_HTTP_SERVER_OATPP)
-  add_dependencies(ddetect oatpp oatpp-swagger oatpp-zlib)
+  add_dependencies(ddetect oatpp oatpp-zlib)
+  if (USE_OATPP_SWAGGER)
+      add_dependencies(ddetect oatpp-swagger)
+  endif()
 endif()
 if (BUILD_SPDLOG)
   add_dependencies(ddetect spdlog)

@@ -59,6 +59,7 @@ OPTION(USE_COMMAND_LINE "build command line JSON API" ON)
 OPTION(USE_JSON_API "build internal JSON API" ON)
 OPTION(USE_HTTP_SERVER "build cppnet-lib version of http JSON API " OFF)
 OPTION(USE_HTTP_SERVER_OATPP "build oatpp version of http JSON API" ON)
+OPTION(USE_OATPP_SWAGGER "Enable Swagger documentation endpoint" ON)
 
 # user set variables
 set(USE_OPENCV_VERSION CACHE STRING "OpenCV Version used by DeepDetect")
@@ -663,10 +664,13 @@ elseif(USE_CAFFE)
         echo "DEBUG:=${CAFFE_DEBUG}" >> Makefile.config &&
         echo "INCLUDE_DIRS+=${SPDLOG_INCLUDE_DIR}" >> Makefile.config &&
         echo "INCLUDE_DIRS+=${PROTOBUF_INCLUDE_DIR}" >> Makefile.config &&
+        echo "INCLUDE_DIRS+=${OpenCV_INCLUDE_DIRS}" >> Makefile.config &&
         echo "CUDA_ARCH:=${CUDA_ARCH}" >> Makefile.config &&
         echo "LIBRARIES+=${SPDLOG_CAFFE_LIB_DEPS}" >> Makefile.config &&
+        echo "LIBRARIES+=${OpenCV_LIBS}" >> Makefile.config &&
         echo "LIBRARY_DIRS+=${SPDLOG_LIB_DIR}" >> Makefile.config &&
-        echo "LIBRARY_DIRS+=${PROTOBUF_LIB_DIR}" >> Makefile.config
+        echo "LIBRARY_DIRS+=${PROTOBUF_LIB_DIR}" >> Makefile.config &&
+        echo "LIBRARY_DIRS+=${OpenCV_CONFIG_PATH}/lib" >> Makefile.config
     BUILD_COMMAND 
         ${CMAKE_COMMAND} -E env LD_LIBRARY_PATH=${PROTOBUF_LIB_DIR}:$ENV{LD_LIBRARY_PATH} PATH=${PROTOBUF_LIB_DIR}:$ENV{PATH} make -j${N} proto &&
         ${CMAKE_COMMAND} -E env LD_LIBRARY_PATH=${PROTOBUF_LIB_DIR}:$ENV{LD_LIBRARY_PATH} PATH=${PROTOBUF_LIB_DIR}:$ENV{PATH} make -j${N} all
@@ -978,6 +982,7 @@ if (USE_TENSORRT)
       ${TRT_PATCHES_PATH}/0003-c++14.patch
       ${TRT_PATCHES_PATH}/0009-fix_compil_order.patch
       ${TRT_PATCHES_PATH}/0010-fix_plugin_detect.patch
+      ${TRT_PATCHES_PATH}/0011-fix_plugin_makefile_cub.patch
       )
 
     # Tensorrt uses its own protobuf version (3.0.0) and this cannot be overrided
@@ -1014,15 +1019,15 @@ if (USE_TENSORRT)
     )
 endif()
 
-set(OATPP_VERSION "1.2.5")
-set(OATPP_SWAGGER_VERSION "1.2.5")
-set(OATPP_ZLIB_VERSION "1.2.5")
+set(OATPP_VERSION "1.3.0")
+set(OATPP_SWAGGER_VERSION "1.3.0")
+set(OATPP_ZLIB_VERSION "1.3.0")
 ExternalProject_Add(
     oatpp
     PREFIX oatpp
     UPDATE_DISCONNECTED 1
     URL https://github.com/oatpp/oatpp/archive/${OATPP_VERSION}.tar.gz
-    URL_HASH SHA256=36276e8b23e68ece1e6093c3f06fc80e3d42a5f4e47cdeef5e7e63f36eeddaad
+    URL_HASH SHA256=e1f80fa8fd7a74da6737e7fee1a4db68b4d7085a3f40e7d550752d6ff5714583
     BUILD_IN_SOURCE true
     CMAKE_ARGS -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF -DOATPP_INSTALL=OFF -DOATPP_BUILD_TESTS=OFF
     INSTALL_COMMAND ""
@@ -1031,7 +1036,7 @@ ExternalProject_Add(
     oatpp-zlib
     PREFIX oatpp-zlib
     URL https://github.com/oatpp/oatpp-zlib/archive/${OATPP_ZLIB_VERSION}.tar.gz
-    URL_HASH SHA256=0009bc160605e804ae69e3627e2279cd27fedabe27fd16f552ea2af6a6f5433d
+    URL_HASH SHA256=6103b041a424b280e7de1f7ae75404f770049750044531f8d41ec4bafaa9497f
     CMAKE_ARGS
         -DCMAKE_BUILD_TYPE=Release
         -DBUILD_SHARED_LIBS=OFF
@@ -1044,43 +1049,53 @@ ExternalProject_Add(
     INSTALL_COMMAND ""
     DEPENDS oatpp
 )
-ExternalProject_Add(
-    oatpp-swagger
-    PREFIX oatpp-swagger
-    URL https://github.com/oatpp/oatpp-swagger/archive/${OATPP_SWAGGER_VERSION}.tar.gz
-    URL_HASH SHA256=56dd44f3b041fe432c27b52f741bb98f1ef97b3c6c4095dc8b9d76e840639ac8
-    BUILD_IN_SOURCE true
-    INSTALL_COMMAND ""
-    CMAKE_ARGS
-        -DCMAKE_BUILD_TYPE=Release
-        -DBUILD_SHARED_LIBS=OFF
-        -DOATPP_BUILD_TESTS=OFF
-        -DOATPP_INSTALL=OFF
-        -DOATPP_MODULES_LOCATION=CUSTOM
-        -DOATPP_DIR_SRC=${CMAKE_BINARY_DIR}/oatpp/src/oatpp/src
-        -DOATPP_DIR_LIB=${CMAKE_BINARY_DIR}/oatpp/src/oatpp/src
-    DEPENDS oatpp
-)
-
-# FIXME(sileht): we should copy res outside build dir and dynamically looks at runtime at different places
-add_definitions("-DOATPP_SWAGGER_RES_PATH=\"${CMAKE_BINARY_DIR}/oatpp-swagger/src/oatpp-swagger/res/\"")
 
 set(OATPP_LIB_DEPS
     ${CMAKE_BINARY_DIR}/oatpp/src/oatpp/src/liboatpp.a
     ${CMAKE_BINARY_DIR}/oatpp-zlib/src/oatpp-zlib/src/liboatpp-zlib.a
-    ${CMAKE_BINARY_DIR}/oatpp-swagger/src/oatpp-swagger/src/liboatpp-swagger.a
     z  # zlib
 )
 include_directories(
     SYSTEM ${CMAKE_BINARY_DIR}/oatpp/src/oatpp/src
     SYSTEM ${CMAKE_BINARY_DIR}/oatpp-zlib/src/oatpp-zlib/src
-    SYSTEM ${CMAKE_BINARY_DIR}/oatpp-swagger/src/oatpp-swagger/src
 )
 set(OATPP_INCLUDE_DIRS
     ${CMAKE_BINARY_DIR}/oatpp/src/oatpp/src
     ${CMAKE_BINARY_DIR}/oatpp-zlib/src/oatpp-zlib/src
-    ${CMAKE_BINARY_DIR}/oatpp-swagger/src/oatpp-swagger/src
 )
+
+if(USE_OATPP_SWAGGER)
+    ExternalProject_Add(
+        oatpp-swagger
+        PREFIX oatpp-swagger
+        URL https://github.com/oatpp/oatpp-swagger/archive/${OATPP_SWAGGER_VERSION}.tar.gz
+        URL_HASH SHA256=4d8db6d73095a786a521a71e8ba6b535fea62237faaaa57d98257312627d3a45
+        BUILD_IN_SOURCE true
+        INSTALL_COMMAND ""
+        CMAKE_ARGS
+            -DCMAKE_BUILD_TYPE=Release
+            -DBUILD_SHARED_LIBS=OFF
+            -DOATPP_BUILD_TESTS=OFF
+            -DOATPP_INSTALL=OFF
+            -DOATPP_MODULES_LOCATION=CUSTOM
+            -DOATPP_DIR_SRC=${CMAKE_BINARY_DIR}/oatpp/src/oatpp/src
+            -DOATPP_DIR_LIB=${CMAKE_BINARY_DIR}/oatpp/src/oatpp/src
+        DEPENDS oatpp
+    )
+
+    list(APPEND OATPP_LIB_DEPS
+        ${CMAKE_BINARY_DIR}/oatpp-swagger/src/oatpp-swagger/src/liboatpp-swagger.a
+    )
+    include_directories(
+        SYSTEM ${CMAKE_BINARY_DIR}/oatpp-swagger/src/oatpp-swagger/src
+    )
+    list(APPEND OATPP_INCLUDE_DIRS
+        ${CMAKE_BINARY_DIR}/oatpp-swagger/src/oatpp-swagger/src
+    )
+    # FIXME(sileht): we should copy res outside build dir and dynamically looks at runtime at different places
+    add_definitions("-DUSE_OATPP_SWAGGER")
+    add_definitions("-DOATPP_SWAGGER_RES_PATH=\"${CMAKE_BINARY_DIR}/oatpp-swagger/src/oatpp-swagger/res/\"")
+endif()
 
 if (USE_HTTP_SERVER)
         ExternalProject_Add(

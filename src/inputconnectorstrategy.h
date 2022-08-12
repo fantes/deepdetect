@@ -222,7 +222,7 @@ namespace dd
     {
       _uris.clear();
       for (auto &uri : *pred_dto->data)
-        _uris.push_back(uri->std_str());
+        _uris.push_back(uri);
       _ids = pred_dto->_ids;
       _meta_uris = pred_dto->_meta_uris;
       _index_uris = pred_dto->_index_uris;
@@ -253,6 +253,24 @@ namespace dd
     void response_params(APIData &out)
     {
       (void)out;
+    }
+
+    /** returns number of lines in corresp file. If no corresp file is found,
+     * returns -1 */
+    int get_corresp_size()
+    {
+      std::string corresp_file = _model_repo + "/corresp.txt";
+      // get alphabet size
+      if (!fileops::file_exists(corresp_file))
+        return -1;
+      std::ifstream in(corresp_file);
+      if (!in.is_open())
+        return -1;
+      int nlines = 0;
+      std::string line;
+      while (getline(in, line))
+        ++nlines;
+      return nlines;
     }
 
     bool _train = false;   /**< whether in train or predict mode. */
