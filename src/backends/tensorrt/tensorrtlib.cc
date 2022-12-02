@@ -39,7 +39,8 @@ namespace dd
 
   static TRTLogger trtLogger;
 
-  static int findEngineBS(std::string repo, std::string engineFileName)
+  static int findEngineBS(std::string repo, std::string engineFileName,
+                          std::string arch)
   {
     std::unordered_set<std::string> lfiles;
     fileops::list_directory(repo, true, false, false, lfiles);
@@ -50,7 +51,8 @@ namespace dd
         if (fstart == std::string::npos)
           fstart = 0;
 
-        if (s.find(engineFileName, fstart) != std::string::npos)
+        if (s.find(engineFileName + "_arch" + arch, fstart)
+            != std::string::npos)
           {
             std::string bs_str;
             for (auto it = s.crbegin(); it != s.crend(); ++it)
@@ -136,6 +138,7 @@ namespace dd
     initLibNvInferPlugins(&trtLogger, "");
     _runtime = std::shared_ptr<nvinfer1::IRuntime>(
         nvinfer1::createInferRuntime(trtLogger));
+    _runtime->setErrorRecorder(new TRTErrorRecorder(this->_logger));
 
     if (ad.has("tensorRTEngineFile"))
       _engineFileName = ad.get("tensorRTEngineFile").get<std::string>();
@@ -374,8 +377,14 @@ namespace dd
 
     if (out_blob == "detection_out")
       network->markOutput(*blobNameToTensor->find("keep_count"));
+
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
     _builder->setMaxBatchSize(_max_batch_size);
-    _builderc->setMaxWorkspaceSize(_max_workspace_size);
+#pragma GCC diagnostic pop
+
+    _builderc->setMemoryPoolLimit(nvinfer1::MemoryPoolType::kWORKSPACE,
+                                  _max_workspace_size);
 
     network->getLayer(0)->setPrecision(nvinfer1::DataType::kFLOAT);
 
@@ -405,7 +414,6 @@ namespace dd
   TensorRTLib<TInputConnectorStrategy, TOutputConnectorStrategy,
               TMLModel>::read_engine_from_onnx()
   {
-    // XXX: TensorRT at the moment only supports explicitBatch models with ONNX
     const auto explicitBatch
         = 1U << static_cast<uint32_t>(
               nvinfer1::NetworkDefinitionCreationFlag::kEXPLICIT_BATCH);
@@ -428,8 +436,10 @@ namespace dd
             "Error while parsing onnx model for conversion to "
             "TensorRT");
       }
-    _builder->setMaxBatchSize(_max_batch_size);
-    _builderc->setMaxWorkspaceSize(_max_workspace_size);
+    // TODO check with onnx models dynamic shape
+    this->_logger->warn("Onnx model: max batch size not used");
+    _builderc->setMemoryPoolLimit(nvinfer1::MemoryPoolType::kWORKSPACE,
+                                  _max_workspace_size);
 
     nvinfer1::IHostMemory *n
         = _builder->buildSerializedNetwork(*network, *_builderc);
@@ -560,10 +570,14 @@ namespace dd
           this->_logger->error("could not determine number of classes");
 
         bool engineRead = false;
+        std::string engine_path = this->_mlmodel._repo + "/" + _engineFileName
+                                  + "_arch" + _arch + "_bs"
+                                  + std::to_string(_max_batch_size);
 
         if (_readEngine)
           {
-            int bs = findEngineBS(this->_mlmodel._repo, _engineFileName);
+            int bs
+                = findEngineBS(this->_mlmodel._repo, _engineFileName, _arch);
             if (bs != _max_batch_size && bs != -1)
               {
                 throw MLLibBadParamException(
@@ -573,10 +587,7 @@ namespace dd
                     + " / either delete it or set your maxBatchSize to "
                     + std::to_string(bs));
               }
-            std::ifstream file(this->_mlmodel._repo + "/" + _engineFileName
-                                   + "_arch" + _arch + "_bs"
-                                   + std::to_string(bs),
-                               std::ios::binary);
+            std::ifstream file(engine_path, std::ios::binary);
             if (file.good())
               {
                 std::vector<char> trtModelStream;
@@ -587,15 +598,40 @@ namespace dd
                 trtModelStream.resize(size);
                 file.read(trtModelStream.data(), size);
                 file.close();
+
+                auto *errors = _runtime->getErrorRecorder();
+                errors->clear();
                 _engine = std::shared_ptr<nvinfer1::ICudaEngine>(
                     _runtime->deserializeCudaEngine(trtModelStream.data(),
                                                     trtModelStream.size()));
 
-                if (_engine == nullptr)
-                  throw MLLibInternalException(
-                      "Engine could not be deserialized");
+                bool shouldRecompile = false;
+                for (int i = 0; i < errors->getNbErrors(); ++i)
+                  {
+                    std::string desc = errors->getErrorDesc(i);
+                    if (desc.find("Version tag does not match")
+                        != std::string::npos)
+                      {
+                        this->_logger->warn(
+                            "Engine is outdated and will be recompiled");
+                        shouldRecompile = true;
+                      }
+                  }
 
-                engineRead = true;
+                if (!shouldRecompile)
+                  {
+                    if (_engine == nullptr)
+                      throw MLLibInternalException(
+                          "Engine could not be deserialized");
+
+                    engineRead = true;
+                  }
+              }
+            else
+              {
+                this->_logger->warn(
+                    "Could not read engine at {}, will recompile.",
+                    engine_path);
               }
           }
 
@@ -623,10 +659,7 @@ namespace dd
 
             if (_writeEngine)
               {
-                std::ofstream p(this->_mlmodel._repo + "/" + _engineFileName
-                                    + "_arch" + _arch + "_bs"
-                                    + std::to_string(_max_batch_size),
-                                std::ios::binary);
+                std::ofstream p(engine_path, std::ios::binary);
                 nvinfer1::IHostMemory *trtModelStream = _engine->serialize();
                 p.write(reinterpret_cast<const char *>(trtModelStream->data()),
                         trtModelStream->size());
@@ -789,6 +822,14 @@ namespace dd
         if (num_processed == 0)
           break;
 
+        // some models don't support dynamic batch size (ex: onnx)
+        // this can lead to undetected bad predictions
+        if (num_processed > _dims.d[0])
+          throw MLLibBadParamException(
+              "Trying to process " + std::to_string(num_processed)
+              + " element, but the model has a maximum batch size of "
+              + std::to_string(_dims.d[0]));
+
         try
           {
 #ifdef USE_CUDA_CV
@@ -807,12 +848,15 @@ namespace dd
                                   cudaMemcpyHostToDevice, cstream);
               }
 
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
             if (!_explicit_batch)
               enqueue_success = _context->enqueue(
                   num_processed, _buffers.data(), cstream, nullptr);
             else
               enqueue_success
                   = _context->enqueueV2(_buffers.data(), cstream, nullptr);
+#pragma GCC diagnostic pop
             if (!enqueue_success)
               throw MLLibInternalException("Failed TRT enqueue call");
 

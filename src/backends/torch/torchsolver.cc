@@ -100,6 +100,12 @@ namespace dd
       }
     else if (_solver_type == "ADAMW")
       {
+        if (_weight_decay == 0.0)
+          {
+            this->_logger->warn("Applying default weight decay of 0.01 to "
+                                "ADAMW instead of 0.0");
+            _weight_decay = 0.01;
+          }
         _optimizer
             = std::unique_ptr<torch::optim::Optimizer>(new torch::optim::AdamW(
                 _params, torch::optim::AdamWOptions(_base_lr)
@@ -342,39 +348,68 @@ namespace dd
               throw;
             }
 
-        for (size_t test_id = 0; test_id < best_iteration_numbers.size();
-             ++test_id)
+        for (size_t i = 0; i < best_iteration_numbers.size(); ++i)
           {
-            std::string bestfilename
-                = mlmodel._repo
-                  + fileops::insert_suffix("_test_" + std::to_string(test_id),
-                                           mlmodel._best_model_filename);
+            std::string bestfilename;
+            if (i == 0)
+              bestfilename = mlmodel._repo + mlmodel._best_model_filename;
+            else
+              bestfilename
+                  = mlmodel._repo
+                    + fileops::insert_suffix("_test_" + std::to_string(i - 1),
+                                             mlmodel._best_model_filename);
+
             std::ifstream bestfile;
             bestfile.open(bestfilename, std::ios::in);
             if (!bestfile.is_open())
               {
-                std::string msg
-                    = "could not find previous best model for test set "
-                      + std::to_string(test_id);
+                std::string msg = "could not find previous best model file "
+                                  + bestfilename;
                 _logger->warn(msg);
-                best_iteration_numbers[test_id] = -1;
-                best_metric_values[test_id]
+                best_iteration_numbers[i] = -1;
+                best_metric_values[i]
                     = std::numeric_limits<double>::infinity();
               }
             else
               {
                 std::string tmp;
-                std::string bin;
+                std::string best_it;
+                std::string best_val;
                 std::string test_name;
-                // first three fields are thrown away
-                bestfile >> tmp >> bin >> tmp >> tmp >> tmp >> test_name;
+                // read metrics
+                while (std::getline(bestfile, tmp))
+                  {
+                    auto splitted = dd_utils::split(tmp, ':');
+                    if (splitted.size() == 2)
+                      {
+                        std::string key = dd_utils::trim_spaces(splitted[0]);
+                        std::string value = dd_utils::trim_spaces(splitted[1]);
+
+                        if (key == "iteration")
+                          {
+                            best_it = value;
+                          }
+                        else if (key == "test_name")
+                          {
+                            test_name = value;
+                          }
+                        else
+                          {
+                            // assuming the last and only field is the metric
+                            best_val = value;
+                          }
+                      }
+                  }
                 bestfile.close();
-                if (test_name != set_names[test_id])
-                  _logger->warn(
-                      "test names not matching: {} (API) vs {} (file)",
-                      set_names[test_id], test_name);
-                best_iteration_numbers[test_id] = std::atof(bin.c_str());
-                best_metric_values[test_id] = std::atof(tmp.c_str());
+                if (i >= 1)
+                  {
+                    if (test_name != set_names[i - 1])
+                      _logger->warn(
+                          "test names not matching: {} (API) vs {} (file)",
+                          set_names[i - 1], test_name);
+                  }
+                best_iteration_numbers[i] = std::atof(best_it.c_str());
+                best_metric_values[i] = std::atof(best_val.c_str());
               }
           }
       }

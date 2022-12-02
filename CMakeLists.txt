@@ -253,6 +253,9 @@ option(USE_DLIB_CPU_ONLY "use DLIB without CUDA" OFF)
 option(USE_CAFFE2_CPU_ONLY "use CAFFE2 without CUDA" OFF)
 option(USE_FAISS_CPU_ONLY "use FAISS without CUDA" OFF)
 
+# Dlib AVX option
+option(USE_DLIB_AVX "build dlib with AVX enabled" OFF)
+
 # Deprecated flag
 if (USE_XGBOOST_GPU)
   set(USE_XGBOOST_CPU_ONLY OFF)
@@ -380,7 +383,7 @@ if (USE_DLIB)
     # Dlib
 
     # Currently supported release version of dlib
-    set(DLIB_RELEASE_VERSION v19.18)
+    set(DLIB_RELEASE_VERSION v19.24)
     message(STATUS "Using Dlib version ${DLIB_RELEASE_VERSION}")
     add_definitions(-DUSE_DLIB)
     set(DLIB_LIB_DEPS -ldlib -lopenblas)
@@ -390,7 +393,7 @@ if (USE_DLIB)
             dlib
             PREFIX dlib
             URL https://github.com/davisking/dlib/archive/${DLIB_RELEASE_VERSION}.tar.gz
-            CONFIGURE_COMMAND cd dlib && mkdir -p build && cd build && cmake .. -DDLIB_NO_GUI_SUPPORT=ON -DDLIB_USE_CUDA=OFF -DCMAKE_INSTALL_PREFIX=${CMAKE_BINARY_DIR}/dlib/build && cmake --build . --config Release --target install
+            CONFIGURE_COMMAND cd dlib && mkdir -p build && cd build && cmake .. -DUSE_AVX_INSTRUCTIONS=${USE_DLIB_AVX} -DDLIB_NO_GUI_SUPPORT=ON -DDLIB_USE_CUDA=OFF -DCMAKE_INSTALL_PREFIX=${CMAKE_BINARY_DIR}/dlib/build && cmake --build . --config Release --target install
             BUILD_COMMAND ""
             INSTALL_COMMAND ""
             BUILD_IN_SOURCE 1
@@ -403,7 +406,7 @@ if (USE_DLIB)
           dlib
           PREFIX dlib
           URL https://github.com/davisking/dlib/archive/${DLIB_RELEASE_VERSION}.tar.gz
-          CONFIGURE_COMMAND cd dlib && mkdir -p build && cd build && cmake .. -DDLIB_NO_GUI_SUPPORT=ON -DDLIB_USE_CUDA=ON -DCMAKE_INSTALL_PREFIX=${CMAKE_BINARY_DIR}/dlib/build && cmake --build . --config Release --target install
+          CONFIGURE_COMMAND cd dlib && mkdir -p build && cd build && cmake .. -DUSE_AVX_INSTRUCTIONS=${USE_DLIB_AVX} -DDLIB_NO_GUI_SUPPORT=ON -DDLIB_USE_CUDA=ON -DCMAKE_INSTALL_PREFIX=${CMAKE_BINARY_DIR}/dlib/build && cmake --build . --config Release --target install
           BUILD_COMMAND ""
           INSTALL_COMMAND ""
           BUILD_IN_SOURCE 1
@@ -770,7 +773,7 @@ if (USE_TORCH)
 
   set(PYTORCH_PATCHES
     ${PYTORCH_PATCHES_PATH}/pytorch_15_compile.patch
-    ${PYTORCH_PATCHES_PATH}/pytorch_19_new_logger.patch
+    ${PYTORCH_PATCHES_PATH}/pytorch_113_new_logger.patch
     ${PYTORCH_PATCHES_PATH}/pytorch_19_use_new_logger.patch
   )
 
@@ -778,7 +781,7 @@ if (USE_TORCH)
   add_definitions(-DUSE_TORCH)
 
   if (NOT TORCH_LOCATION)
-    set(PYTORCH_COMMIT v1.11.0)
+    set(PYTORCH_COMMIT v1.13.0)
     set(PYTORCH_COMPLETE ${CMAKE_BINARY_DIR}/CMakeFiles/pytorch-complete)
 
     if(USE_TORCH_CPU_ONLY)
@@ -818,7 +821,7 @@ if (USE_TORCH)
 
   # TORCH VISION
   message(STATUS "Configuring Pytorch Vision")
-  set(PYTORCH_VISION_COMMIT "v0.12.0") # 0.11.2 & torch 1.10.1
+  set(PYTORCH_VISION_COMMIT "v0.14.0") # 0.14.0 & torch 1.13.0
   set(PYTORCH_VISION_PATCHES_PATH ${CMAKE_BINARY_DIR}/patches/pytorch/vision)
   # set(PYTORCH_VISION_PATCHES
   #   ${PYTORCH_VISION_PATCHES_PATH}/xxx.patch # add patches here
@@ -958,7 +961,7 @@ if (USE_TENSORRT)
 
     if (NOT TENSORRT_VERSION)
         if (EXISTS "${TRTTESTDIR}/libnvinfer.so.8")
-            set(TENSORRT_VERSION 22.03)
+            set(TENSORRT_VERSION 8.4.3)
             message(STATUS "Found TensorRT libraries version 8")
         else()
             message(FATAL_ERROR "No supported TensorRT version found")
@@ -970,6 +973,7 @@ if (USE_TENSORRT)
       -DTRT_OUT_DIR=${CMAKE_BINARY_DIR}/tensorrt-oss/bin
       -DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc
       -DBUILD_SAMPLES=OFF
+      -DPY_VERSION=3
     )
 
     if (JETSON)
@@ -1021,7 +1025,8 @@ endif()
 
 set(OATPP_VERSION "1.3.0")
 set(OATPP_SWAGGER_VERSION "1.3.0")
-set(OATPP_ZLIB_VERSION "1.3.0")
+# 1.3 + memory leak patch
+set(OATPP_ZLIB_VERSION "e7318068ae1b24b7d690f374ffbcd9c8f691336b")
 ExternalProject_Add(
     oatpp
     PREFIX oatpp
@@ -1036,7 +1041,7 @@ ExternalProject_Add(
     oatpp-zlib
     PREFIX oatpp-zlib
     URL https://github.com/oatpp/oatpp-zlib/archive/${OATPP_ZLIB_VERSION}.tar.gz
-    URL_HASH SHA256=6103b041a424b280e7de1f7ae75404f770049750044531f8d41ec4bafaa9497f
+    URL_HASH SHA256=17d85ace758ac3b924802d10473a8ed4cf6ee2ffa125022d5a64debf564cf3c3
     CMAKE_ARGS
         -DCMAKE_BUILD_TYPE=Release
         -DBUILD_SHARED_LIBS=OFF
@@ -1292,6 +1297,7 @@ message(STATUS "USE_HDF5:              ${USE_HDF5}")
 message(STATUS "USE_TENSORRT:          ${USE_TENSORRT}")
 message(STATUS "USE_DLIB:              ${USE_DLIB}")
 message(STATUS "USE_DLIB_CPU_ONLY:     ${USE_DLIB_CPU_ONLY}")
+message(STATUS "USE_DLIB_AVX:          ${USE_DLIB_AVX}")
 message(STATUS "USE_ANNOY:             ${USE_ANNOY}")
 message(STATUS "USE_FAISS:             ${USE_FAISS}")
 message(STATUS "USE_FAISS_CPU_ONLY:    ${USE_FAISS_CPU_ONLY}")

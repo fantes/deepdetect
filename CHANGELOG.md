@@ -1,9 +1,14 @@
 # DeepDetect: Open Source Deep Learning Server & API (Changelog)
 
-### [0.22.1](https://github.com/jolibrain/deepdetect/compare/v0.22.0...v0.22.1) (2022-05-28)
+### [0.23.1](https://github.com/jolibrain/deepdetect/compare/v0.23.0...v0.23.1) (2022-10-14)
+
+
+### Features
+
+* **chain:** crop with minimum dims, force square ([a41ca51](https://github.com/jolibrain/deepdetect/commit/a41ca51a24779d97d8d9ddd8fcf923365edfaa73))
 
 
 ### Bug Fixes
 
-* caffe build can use custom opencv ([fde90cd](https://github.com/jolibrain/deepdetect/commit/fde90cdeca1b1f911c64f6cc91b2c2d055429dad))
-* wrong cuda runtime in docker images ([8ca5acf](https://github.com/jolibrain/deepdetect/commit/8ca5acf5f9bd0cf46de859fd3100d969eb892bdc))
+* **torch:** class_weights with multigpu ([9c1ed4c](https://github.com/jolibrain/deepdetect/commit/9c1ed4c11b844922b83a9b2d70abc719c58d3438))
+* **torch:** metrics naming for multiple test sets ([17b8cbb](https://github.com/jolibrain/deepdetect/commit/17b8cbbfe77f974cb28a29740813902d68ef33cf))
