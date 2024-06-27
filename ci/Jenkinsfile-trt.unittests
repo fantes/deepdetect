@@ -39,12 +39,13 @@ cmake .. \
     -DBUILD_SPDLOG=ON \
     -DUSE_HTTP_SERVER_OATPP=ON \
     -DUSE_CUDA_CV=ON  \
-    -DUSE_CAFFE=OFF  \
+    -DUSE_TORCH=OFF  \
     -DUSE_TENSORRT=ON  \
     -DUSE_TENSORRT_OSS=ON  \
     -DUSE_OPENCV_VERSION=4 \
     -DOpenCV_DIR=/tmp/opencv/opencv-5.4.3/build \
-    -DCUDA_ARCH="-gencode arch=compute_61,code=sm_61 -gencode arch=compute_75,code=sm_75 -gencode arch=compute_86,code=sm_86"
+    -DCUDA_ARCH_FLAGS="-gencode arch=compute_61,code=sm_61 -gencode arch=compute_75,code=sm_75 -gencode arch=compute_86,code=sm_86" \
+    -DCUDA_ARCH="6.1;7.5;8.6"
 
 make clang-format-check
 schedtool -B -n 1 -e ionice -n 1 make -j 6

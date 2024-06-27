@@ -109,7 +109,9 @@ namespace dd
         // XXX: torch does not require weights since the weights are in the
         // repo. But other mllib require weights (eg caffe).
         info->description = "Whether to prepare neural net template for "
-                            "finetuning (requires `weights`)";
+                            "finetuning. Use this option if you want to use "
+                            "weights from another model, but change the head "
+                            "to a different number of classes, for example";
       };
       DTO_FIELD(Boolean, finetuning) = false;
 
@@ -182,6 +184,12 @@ namespace dd
             = "Model outputs an independent score for each class";
       }
       DTO_FIELD(Boolean, multi_label) = false;
+
+      DTO_FIELD_INFO(concurrent_predict)
+      {
+        info->description = "Enable/disable concurrent predict for the model";
+      }
+      DTO_FIELD(Boolean, concurrent_predict) = true;
 
       // Libtorch predict options
       DTO_FIELD_INFO(forward_method)

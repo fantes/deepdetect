@@ -24,6 +24,7 @@
 
 #include "apistrategy.h"
 #include "dd_types.h"
+#include "dto/info.hpp"
 
 namespace dd
 {
@@ -94,9 +95,10 @@ namespace dd
     // return a JSON document for every API call
     JDoc info(const std::string &jstr) const;
     JDoc service_create(const std::string &sname, const std::string &jstr);
-    JDoc service_status(const std::string &sname);
+    JDoc service_status(const std::string &sname, bool status = true,
+                        bool labels = false);
+    JDoc service_labels(const std::string &sname);
     JDoc service_delete(const std::string &sname, const std::string &jstr);
-
     JDoc service_predict(const std::string &jstr);
 
     JDoc service_train(const std::string &jstr);
@@ -128,39 +130,21 @@ namespace dd
   class visitor_info
   {
   public:
-    visitor_info(const bool &status) : _status(status)
+    visitor_info(const bool &status, const bool &labels = false)
+        : _status(status), _labels(labels)
     {
     }
     ~visitor_info()
     {
     }
 
-    template <typename T> APIData operator()(T &mllib)
+    template <typename T> oatpp::Object<DTO::Service> operator()(T &mllib)
     {
-      return mllib.info(_status);
+      return mllib.info(_status, _labels);
     }
     bool _status = false;
+    bool _labels = false;
   };
-
-  /**
-   * \brief visitor class for service status call
-   */
-  class visitor_status
-  {
-  public:
-    visitor_status()
-    {
-    }
-    ~visitor_status()
-    {
-    }
-
-    template <typename T> APIData operator()(T &mllib)
-    {
-      return mllib.status();
-    }
-  };
-
 }
 
 #endif

@@ -28,6 +28,8 @@
 #include <rapidjson/writer.h>
 #include <gflags/gflags.h>
 
+#include "utils/oatpp.hpp"
+
 DEFINE_string(service_start_list, "",
               "list of JSON calls to be executed at startup");
 DEFINE_bool(service_start_list_no_exit_on_failure, false,
@@ -347,30 +349,15 @@ namespace dd
     return jd;
   }
 
+  // XXX: legacy methods, remove in favor of dd_utils::jrender?
   std::string JsonAPI::jrender(const JDoc &jst) const
   {
-    rapidjson::StringBuffer buffer;
-    rapidjson::Writer<rapidjson::StringBuffer, rapidjson::UTF8<>,
-                      rapidjson::UTF8<>, rapidjson::CrtAllocator,
-                      rapidjson::kWriteNanAndInfFlag>
-        writer(buffer);
-    bool done = jst.Accept(writer);
-    if (!done)
-      throw DataConversionException("JSON rendering failed");
-    return buffer.GetString();
+    return dd_utils::jrender(jst);
   }
 
   std::string JsonAPI::jrender(const JVal &jval) const
   {
-    rapidjson::StringBuffer buffer;
-    rapidjson::Writer<rapidjson::StringBuffer, rapidjson::UTF8<>,
-                      rapidjson::UTF8<>, rapidjson::CrtAllocator,
-                      rapidjson::kWriteNanAndInfFlag>
-        writer(buffer);
-    bool done = jval.Accept(writer);
-    if (!done)
-      throw DataConversionException("JSON rendering failed");
-    return buffer.GetString();
+    return dd_utils::jrender(jval);
   }
 
   JDoc JsonAPI::info(const std::string &jstr) const
@@ -432,10 +419,10 @@ namespace dd
     auto hit = _mlservices.begin();
     while (hit != _mlservices.end())
       {
-        APIData ad
+        auto dto
             = mapbox::util::apply_visitor(visitor_info(status), (*hit).second);
         JVal jserv(rapidjson::kObjectType);
-        ad.toJVal(jinfo, jserv);
+        oatpp_utils::dtoToJVal(dto, jinfo, jserv);
         jservs.PushBack(jserv, jinfo.GetAllocator());
         ++hit;
       }
@@ -970,7 +957,8 @@ namespace dd
     return jsc;
   }
 
-  JDoc JsonAPI::service_status(const std::string &snamein)
+  JDoc JsonAPI::service_status(const std::string &snamein, bool status,
+                               bool labels)
   {
     std::string sname(snamein);
     std::transform(snamein.begin(), snamein.end(), sname.begin(), ::tolower);
@@ -980,10 +968,11 @@ namespace dd
     if (!this->service_exists(sname))
       return dd_service_not_found_1002(sname);
     auto hit = this->get_service_it(sname);
-    APIData ad = mapbox::util::apply_visitor(visitor_status(), (*hit).second);
+    auto status_dto = mapbox::util::apply_visitor(visitor_info(status, labels),
+                                                  (*hit).second);
     JDoc jst = dd_ok_200();
     JVal jbody(rapidjson::kObjectType);
-    ad.toJVal(jst, jbody);
+    oatpp_utils::dtoToJVal(status_dto, jst, jbody);
     jst.AddMember("body", jbody, jst.GetAllocator());
     return jst;
   }
@@ -991,7 +980,6 @@ namespace dd
   JDoc JsonAPI::service_delete(const std::string &snamein,
                                const std::string &jstr)
   {
-
     std::string sname(snamein);
     std::transform(snamein.begin(), snamein.end(), sname.begin(), ::tolower);
 
@@ -1082,12 +1070,10 @@ namespace dd
       }
 
     // prediction
-    APIData out;
+    oatpp::Object<DTO::PredictBody> pred_dto;
     try
       {
-        this->predict(
-            ad_data, sname,
-            out); // we ignore returned status, stored in out data object
+        pred_dto = this->predict(ad_data, sname);
       }
     catch (InputConnectorBadParamException &e)
       {
@@ -1129,10 +1115,7 @@ namespace dd
       }
     JDoc jpred = dd_ok_200();
     JVal jout(rapidjson::kObjectType);
-    if (out.has("dto"))
-      oatpp_utils::dtoToJVal(out.get("dto").get<oatpp::Any>(), jpred, jout);
-    else
-      out.toJVal(jpred, jout);
+    oatpp_utils::dtoToJVal(pred_dto, jpred, jout);
     bool has_measure
         = ad_data.getobj("parameters").getobj("output").has("measure");
     JVal jhead(rapidjson::kObjectType);

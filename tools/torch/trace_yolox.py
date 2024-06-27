@@ -20,12 +20,12 @@ def main():
 General usage (examples):
 - Export yolox model for DeepDetect training:
 
-    python3 trace_yolox.py -v yolox[-s|-m|-l|...] --yolox_path [YOLOX_PATH] --output_dir [OUTPUT_DIR] --num_classes 3 --img_width 512 --img_height 512
+    python3 trace_yolox.py -v yolox[-s|-m|-l|...] --yolox_path [YOLOX_PATH] --output_dir [OUTPUT_DIR] --backbone_weights /path/to/yolox_weights.pth --num_classes 3
 
 - Export dd-trained yolox model to onnx for trt inference:
 
     python3 trace_yolox.py -v yolox[-s|-m|-l|...] --yolox_path [YOLOX_PATH] --output_dir [OUTPUT_DIR] --from_repo [DD_REPO] --to_onnx
-"""
+""", formatter_class=argparse.RawDescriptionHelpFormatter
     )
     parser.add_argument("model", type=str, help="Model to export")
     parser.add_argument(
@@ -243,13 +243,13 @@ class YoloXWrapper(torch.nn.Module):
                 bboxes[start:stop]
                 targ = torch.cat(
                     (
-                        labels[start:stop].unsqueeze(1),
+                        # dd uses 0 as background class, not YOLOX
+                        labels[start:stop].unsqueeze(1) - 1,
                         self.convert_targs(bboxes[start:stop]),
                     ),
                     dim=1,
                 )
-                # dd uses 0 as background class, not YOLOX
-                targ = targ - 1
+
                 l_targs.append(targ)
                 max_count = max(max_count, targ.shape[0])
 
@@ -355,7 +355,7 @@ def image_loader(loader, image_name):
 
 
 def get_image_input(batch_size=1, img_width=224, img_height=224):
-    return torch.rand(batch_size, 3, img_width, img_height)
+    return torch.rand(batch_size, 3, img_height, img_width)
 
 
 def get_detection_input(batch_size=1, img_width=224, img_height=224):
@@ -363,7 +363,7 @@ def get_detection_input(batch_size=1, img_width=224, img_height=224):
     Sample input for detection models, usable for tracing or testing
     """
     return (
-        torch.rand(batch_size, 3, img_width, img_height),
+        torch.rand(batch_size, 3, img_height, img_width),
         torch.arange(0, batch_size).long(),
         torch.Tensor([1, 1, 200, 200]).repeat((batch_size, 1)),
         torch.full((batch_size,), 1).long(),
@@ -425,7 +425,9 @@ def fill_args_from_repo(repo_path, args):
                 logging.info("Deduced model %s with suffix %s" % (args.model, suffix))
 
         if not model_found:
-            raise RuntimeError("Could not deduce the model from repository name %s" % repo_name)
+            raise RuntimeError(
+                "Could not deduce the model from repository name %s" % repo_name
+            )
 
 
 if __name__ == "__main__":

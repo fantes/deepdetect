@@ -14,10 +14,8 @@ NAMES="$@"
 
 declare -A TARGETS
 TARGETS[cpu]="cpu/default"
-TARGETS[cpu_torch]="cpu/torch"
 TARGETS[gpu]="gpu/default"
 TARGETS[gpu_tf]="gpu/tf"
-TARGETS[gpu_torch]="gpu/torch"
 TARGETS[gpu_tensorrt]="gpu_tensorrt/tensorrt"
 
 PR_NUMBER=$(echo $GIT_BRANCH | sed -n '/^PR-/s/PR-//gp')
@@ -32,7 +30,7 @@ else
     TMP_TAG="trash"
 fi
 
-image_url_prefix="jolibrain/deepdetect"
+image_url_prefix="docker.jolibrain.com/deepdetect"
 
 for name in $NAMES; do
     target=${TARGETS[$name]}

@@ -217,19 +217,19 @@ namespace dd
     {
     public:
       const APIData &_in;
-      APIData &_out;
       bool _chain;
 
-      template <typename T> int operator()(T &mllib)
+      template <typename T>
+      oatpp::Object<DTO::PredictBody> operator()(T &mllib)
       {
-        return mllib.predict_job(_in, _out, _chain);
+        return mllib.predict_job(_in, _chain);
       }
     };
     template <typename T>
-    static int predict_job(T &mllib, const APIData &in, APIData &out,
-                           bool chain)
+    static oatpp::Object<DTO::PredictBody>
+    predict_job(T &mllib, const APIData &in, bool chain)
     {
-      visitor_mllib::v_predict_job v{ in, out, chain };
+      visitor_mllib::v_predict_job v{ in, chain };
       return mapbox::util::apply_visitor(v, mllib);
     }
 
@@ -614,16 +614,17 @@ namespace dd
      * \brief prediction from statistical model
      * @param ad root data object
      * @param sname service name
-     * @param out output data object
+     * @return output DTO
      */
-    int predict(const APIData &ad_in, const std::string &sname,
-                APIData &ad_out, const bool &chain = false)
+    oatpp::Object<DTO::PredictBody> predict(const APIData &ad_in,
+                                            const std::string &sname,
+                                            const bool &chain = false)
     {
       std::chrono::time_point<std::chrono::system_clock> tstart
           = std::chrono::system_clock::now();
 
-      int status = 0;
       auto llog = spdlog::get(sname);
+      oatpp::Object<DTO::PredictBody> pred_dto;
       try
         {
           auto hit = get_service_it(sname);
@@ -650,7 +651,8 @@ namespace dd
                 data_vec = ad_in.get("data").get<std::vector<std::string>>();
             }
 
-          std::vector<oatpp::Object<DTO::ResourceResponseBody>> res_infos;
+          auto res_infos = oatpp::Vector<
+              oatpp::Object<DTO::ResourceResponseBody>>::createShared();
 
           for (const auto &data_uri : data_vec)
             {
@@ -660,23 +662,16 @@ namespace dd
                   auto res_info = DTO::ResourceResponseBody::createShared();
                   visitor_resources::apply(
                       rit->second, const_cast<APIData &>(ad_in), res_info);
-                  res_infos.push_back(res_info);
+                  res_infos->push_back(res_info);
                 }
             }
 
           // predict call
-          status = visitor_mllib::predict_job(mllib, ad_in, ad_out, chain);
+          pred_dto = visitor_mllib::predict_job(mllib, ad_in, chain);
 
           // update result with resource info
-          if (!res_infos.empty())
-            {
-              std::vector<APIData> res_vad;
-              for (auto res_info : res_infos)
-                res_vad.push_back(
-                    APIData::fromDTO<DTO::ResourceResponseBody>(res_info));
-
-              ad_out.add("resources", res_vad);
-            }
+          if (!res_infos->empty())
+            pred_dto->resources = res_infos;
         }
       catch (InputConnectorBadParamException &e)
         {
@@ -709,16 +704,22 @@ namespace dd
       double elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
                            tstop - tstart)
                            .count();
-      if (ad_out.has("dto"))
+      pred_dto->time = elapsed;
+      return pred_dto;
+    }
+
+    /** Find a logger name that does not exist yet for chain call */
+    std::string find_logger_name(std::string cname)
+    {
+      int i = 1;
+      std::string prefix = cname;
+
+      while (spdlog::get(cname) != nullptr)
         {
-          auto pred_dto = ad_out.get("dto")
-                              .get<oatpp::Any>()
-                              .retrieve<oatpp::Object<DTO::PredictBody>>();
-          pred_dto->time = elapsed;
+          i++;
+          cname = prefix + "-" + std::to_string(i);
         }
-      else
-        ad_out.add("time", elapsed);
-      return status;
+      return cname;
     }
 
     int chain_service(const std::string &cname,
@@ -765,11 +766,30 @@ namespace dd
                                                              // be supported /
                                                              // auto-detected)
             }
+#ifdef USE_CUDA_CV
+          else if (act_data.has("data_cuda_img"))
+            {
+              adc.add("data_raw_img_cuda",
+                      act_data.get("data_cuda_img")
+                          .get<std::vector<cv::cuda::GpuMat>>());
+              if (act_data.has("cuda_mask"))
+                {
+                  adc.add("masks_cuda",
+                          act_data.get("masks_cuda")
+                              .get<std::vector<cv::cuda::GpuMat>>());
+                }
+            }
+#endif
           else if (act_data.has("data_raw_img")) // raw images
             {
               adc.add(
                   "data_raw_img",
                   act_data.get("data_raw_img").get<std::vector<cv::Mat>>());
+              if (act_data.has("mask"))
+                {
+                  adc.add("masks",
+                          act_data.get("mask").get<std::vector<cv::Mat>>());
+                }
             }
           adc.add("ids",
                   act_data.get("cids")
@@ -783,10 +803,10 @@ namespace dd
           cdata._first_id = pred_id;
         }
 
-      APIData pred_out;
+      oatpp::Object<DTO::PredictBody> pred_dto;
       try
         {
-          predict(adc, sname, pred_out, true);
+          pred_dto = predict(adc, sname, true);
         }
       catch (...)
         {
@@ -799,89 +819,43 @@ namespace dd
       std::vector<std::string> nmeta_uris;
       std::vector<std::string> nindex_uris;
 
-      if (pred_out.has("dto"))
+      auto predictions = pred_dto->predictions;
+      if (predictions->empty())
         {
-          auto dto = pred_out.get("dto")
-                         .get<oatpp::Any>()
-                         .retrieve<oatpp::Object<DTO::PredictBody>>();
-
-          auto predictions = dto->predictions;
-          if (predictions->empty())
-            {
-              chain_logger->info("[" + std::to_string(chain_pos)
-                                 + "]  no predictions");
-              return 1;
-            }
-
-          for (size_t j = 0; j < predictions->size(); j++)
-            {
-              auto pred = predictions->at(j);
-              // TODO add vectors
-              size_t npred_classes
-                  = pred->classes != nullptr ? pred->classes->size() : 0;
-              classes_size += npred_classes;
-              vals_size += static_cast<int>(pred->vals != nullptr);
-
-              if (chain_pos == 0) // first call's response contains uniformized
-                                  // top level URIs.
-                {
-                  for (size_t k = 0; k < npred_classes; k++)
-                    {
-                      nmeta_uris.push_back(pred->uri);
-                      if (pred->index_uri)
-                        nindex_uris.push_back(pred->index_uri);
-                    }
-                }
-              else // update meta uris to batch size at the current level
-                   // of the chain
-                {
-                  for (size_t k = 0; k < npred_classes; k++)
-                    {
-                      nmeta_uris.push_back(meta_uris.at(j));
-                      if (!index_uris.empty())
-                        nindex_uris.push_back(index_uris.at(j));
-                    }
-                }
-            }
+          chain_logger->info("[" + std::to_string(chain_pos)
+                             + "]  no predictions");
+          return 1;
         }
-      else
-        {
-          // check on results
-          std::vector<APIData> vad = pred_out.getv("predictions");
-          if (vad.empty())
-            {
-              chain_logger->info("[" + std::to_string(chain_pos)
-                                 + "]  no predictions");
-              return 1;
-            }
 
-          for (size_t j = 0; j < vad.size(); j++)
+      for (size_t j = 0; j < predictions->size(); j++)
+        {
+          auto pred = predictions->at(j);
+          size_t npred_classes
+              = std::max(pred->classes != nullptr ? pred->classes->size() : 0,
+                         pred->vector != nullptr ? pred->vector->size() : 0);
+
+          classes_size += npred_classes;
+          vals_size += static_cast<int>(pred->vals != nullptr)
+                       + static_cast<int>(pred->images->size());
+
+          if (chain_pos == 0) // first call's response contains uniformized
+                              // top level URIs.
             {
-              size_t npred_classes = std::max(vad.at(j).getv("classes").size(),
-                                              vad.at(j).getv("vector").size());
-              classes_size += npred_classes;
-              vals_size += static_cast<int>(vad.at(j).has("vals"));
-              if (chain_pos == 0) // first call's response contains
-                                  // uniformized top level URIs.
+              for (size_t k = 0; k < npred_classes; k++)
                 {
-                  for (size_t k = 0; k < npred_classes; k++)
-                    {
-                      nmeta_uris.push_back(
-                          vad.at(j).get("uri").get<std::string>());
-                      if (vad.at(j).has("index_uri"))
-                        nindex_uris.push_back(
-                            vad.at(j).get("index_uri").get<std::string>());
-                    }
+                  nmeta_uris.push_back(pred->uri);
+                  if (pred->index_uri)
+                    nindex_uris.push_back(pred->index_uri);
                 }
-              else // update meta uris to batch size at the current level of
-                   // the chain
+            }
+          else // update meta uris to batch size at the current level
+               // of the chain
+            {
+              for (size_t k = 0; k < npred_classes; k++)
                 {
-                  for (size_t k = 0; k < npred_classes; k++)
-                    {
-                      nmeta_uris.push_back(meta_uris.at(j));
-                      if (!index_uris.empty())
-                        nindex_uris.push_back(index_uris.at(j));
-                    }
+                  nmeta_uris.push_back(meta_uris.at(j));
+                  if (!index_uris.empty())
+                    nindex_uris.push_back(index_uris.at(j));
                 }
             }
         }
@@ -894,14 +868,14 @@ namespace dd
           chain_logger->info("[" + std::to_string(chain_pos)
                              + "] / no result from prediction");
           cdata.add_model_data(pred_id,
-                               pred_out); // store empty model output
+                               pred_dto); // store empty model output
           return 1;
         }
 
       ++npredicts;
 
       // store model output
-      cdata.add_model_data(pred_id, pred_out);
+      cdata.add_model_data(pred_id, pred_dto);
 
       return 0;
     }
@@ -913,8 +887,9 @@ namespace dd
       std::string action_type
           = adc.getobj("action").get("type").get<std::string>();
 
-      APIData prev_data = cdata.get_model_data(prec_pred_id);
-      if (!prev_data.getv("predictions").size())
+      oatpp::Object<DTO::PredictBody> prev_data
+          = cdata.get_model_data(prec_pred_id);
+      if (prev_data->predictions->empty())
         {
           // no prediction to work from
           chain_logger->info("no prediction to act on");
@@ -930,8 +905,8 @@ namespace dd
       // replace prev_data in cdata for prec_pred_id
       cdata.add_model_data(prec_pred_id, prev_data);
 
-      std::vector<APIData> vad = prev_data.getv("predictions");
-      if (vad.empty())
+      auto predictions = prev_data->predictions;
+      if (predictions->empty())
         {
           // no prediction to work from
           chain_logger->info("no prediction to act on after applying action "
@@ -939,17 +914,21 @@ namespace dd
           return 1;
         }
 
+      // check that there are predictions
       int classes_size = 0;
       int vals_size = 0;
-      for (size_t i = 0; i < vad.size(); i++)
+      for (size_t i = 0; i < predictions->size(); i++)
         {
-          int npred_classes = std::max(vad.at(i).getv("classes").size(),
-                                       vad.at(i).getv("vector").size());
+          auto pred = predictions->at(i);
+          size_t npred_classes
+              = std::max(pred->classes != nullptr ? pred->classes->size() : 0,
+                         pred->vector != nullptr ? pred->vector->size() : 0);
           classes_size += npred_classes;
-          vals_size += static_cast<int>(vad.at(i).has("vals"));
+          vals_size += static_cast<int>(pred->vals != nullptr)
+                       + static_cast<int>(pred->images->size());
         }
 
-      if (!classes_size && !vals_size)
+      if (classes_size == 0 && vals_size == 0)
         {
           chain_logger->info("[" + std::to_string(chain_pos)
                              + "] / no result after applying action "
@@ -960,12 +939,12 @@ namespace dd
       return 0;
     }
 
-    oatpp::Object<DTO::ChainBody> chain(const APIData &ad,
-                                        const std::string &cname)
+    oatpp::Object<DTO::ChainBody> chain(const APIData &ad, std::string cname)
     {
       oatpp::Object<DTO::ChainBody> chain_dto;
       try
         {
+          cname = find_logger_name(cname);
           auto chain_logger = DD_SPDLOG_LOGGER(cname);
 
           std::chrono::time_point<std::chrono::system_clock> tstart
@@ -1078,20 +1057,7 @@ namespace dd
     {
       APIData pred_in;
       pred_in.add("dto", predict_dto);
-      APIData pred_out;
-      predict(pred_in, sname, pred_out);
-
-      if (pred_out.has("dto"))
-        {
-          auto dto = pred_out.get("dto")
-                         .get<oatpp::Any>()
-                         .retrieve<oatpp::Object<DTO::PredictBody>>();
-          return dto;
-        }
-      else
-        {
-          return pred_out.createSharedDTO<DTO::PredictBody>();
-        }
+      return predict(pred_in, sname);
     }
 
     int chain_service(const std::string &cname,
@@ -1143,12 +1109,23 @@ namespace dd
               call_dto->_data_raw_img_cuda
                   = act_data.get("data_cuda_img")
                         .get<std::vector<cv::cuda::GpuMat>>();
+              if (act_data.has("cuda_mask"))
+                {
+                  call_dto->_masks_cuda
+                      = act_data.get("cuda_mask")
+                            .get<std::vector<cv::cuda::GpuMat>>();
+                }
             }
 #endif
           else if (act_data.has("data_raw_img")) // raw images
             {
               call_dto->_data_raw_img
                   = act_data.get("data_raw_img").get<std::vector<cv::Mat>>();
+              if (act_data.has("mask"))
+                {
+                  call_dto->_masks
+                      = act_data.get("mask").get<std::vector<cv::Mat>>();
+                }
             }
           call_dto->_ids
               = act_data.get("cids")
@@ -1166,10 +1143,10 @@ namespace dd
 
       APIData pred_in;
       pred_in.add("dto", call_dto);
-      APIData pred_out;
+      oatpp::Object<DTO::PredictBody> pred_dto;
       try
         {
-          predict(pred_in, sname, pred_out, true);
+          pred_dto = predict(pred_in, sname, true);
         }
       catch (...)
         {
@@ -1182,93 +1159,45 @@ namespace dd
       std::vector<std::string> nmeta_uris;
       std::vector<std::string> nindex_uris;
 
-      if (pred_out.has("dto"))
+      auto predictions = pred_dto->predictions;
+      if (predictions->empty())
         {
-          auto dto = pred_out.get("dto")
-                         .get<oatpp::Any>()
-                         .retrieve<oatpp::Object<DTO::PredictBody>>();
+          chain_logger->info("[" + std::to_string(chain_pos)
+                             + "]  no predictions");
+          return 1;
+        }
 
-          auto predictions = dto->predictions;
-          if (predictions->empty())
+      for (size_t j = 0; j < predictions->size(); j++)
+        {
+          auto pred = predictions->at(j);
+          size_t npred_classes
+              = std::max(pred->classes != nullptr ? pred->classes->size() : 0,
+                         pred->vector != nullptr ? pred->vector->size() : 0);
+          classes_size += npred_classes;
+          vals_size += static_cast<int>(pred->vals != nullptr)
+                       + static_cast<int>(pred->images->size());
+
+          if (chain_pos == 0) // first call's response contains uniformized
+                              // top level URIs.
             {
-              chain_logger->info("[" + std::to_string(chain_pos)
-                                 + "]  no predictions");
-              return 1;
-            }
-
-          for (size_t j = 0; j < predictions->size(); j++)
-            {
-              auto pred = predictions->at(j);
-              // TODO add vectors
-              size_t npred_classes
-                  = pred->classes != nullptr ? pred->classes->size() : 0;
-              classes_size += npred_classes;
-              vals_size += static_cast<int>(pred->vals != nullptr);
-
-              if (chain_pos == 0) // first call's response contains uniformized
-                                  // top level URIs.
+              for (size_t k = 0; k < npred_classes; k++)
                 {
-                  for (size_t k = 0; k < npred_classes; k++)
-                    {
-                      nmeta_uris.push_back(pred->uri);
-                      if (pred->index_uri)
-                        nindex_uris.push_back(pred->index_uri);
-                    }
+                  nmeta_uris.push_back(pred->uri);
+                  if (pred->index_uri)
+                    nindex_uris.push_back(pred->index_uri);
                 }
-              else // update meta uris to batch size at the current level
-                   // of the chain
+            }
+          else // update meta uris to batch size at the current level
+               // of the chain
+            {
+              for (size_t k = 0; k < npred_classes; k++)
                 {
-                  for (size_t k = 0; k < npred_classes; k++)
-                    {
-                      nmeta_uris.push_back(meta_uris.at(j));
-                      if (!index_uris.empty())
-                        nindex_uris.push_back(index_uris.at(j));
-                    }
+                  nmeta_uris.push_back(meta_uris.at(j));
+                  if (!index_uris.empty())
+                    nindex_uris.push_back(index_uris.at(j));
                 }
             }
         }
-      else
-        {
-          // check on results
-          std::vector<APIData> vad = pred_out.getv("predictions");
-          if (vad.empty())
-            {
-              chain_logger->info("[" + std::to_string(chain_pos)
-                                 + "]  no predictions");
-              return 1;
-            }
-
-          for (size_t j = 0; j < vad.size(); j++)
-            {
-              size_t npred_classes = std::max(vad.at(j).getv("classes").size(),
-                                              vad.at(j).getv("vector").size());
-              classes_size += npred_classes;
-              vals_size += static_cast<int>(vad.at(j).has("vals"));
-              if (chain_pos == 0) // first call's response contains
-                                  // uniformized top level URIs.
-                {
-                  for (size_t k = 0; k < npred_classes; k++)
-                    {
-                      nmeta_uris.push_back(
-                          vad.at(j).get("uri").get<std::string>());
-                      if (vad.at(j).has("index_uri"))
-                        nindex_uris.push_back(
-                            vad.at(j).get("index_uri").get<std::string>());
-                    }
-                }
-              else // update meta uris to batch size at the current level of
-                   // the chain
-                {
-                  for (size_t k = 0; k < npred_classes; k++)
-                    {
-                      nmeta_uris.push_back(meta_uris.at(j));
-                      if (!index_uris.empty())
-                        nindex_uris.push_back(index_uris.at(j));
-                    }
-                }
-            }
-        }
-
       meta_uris = nmeta_uris;
       index_uris = nindex_uris;
 
@@ -1277,14 +1206,14 @@ namespace dd
           chain_logger->info("[" + std::to_string(chain_pos)
                              + "] / no result from prediction");
           cdata.add_model_data(pred_id,
-                               pred_out); // store empty model output
+                               pred_dto); // store empty model output
           return 1;
         }
 
       ++npredicts;
 
       // store model output
-      cdata.add_model_data(pred_id, pred_out);
+      cdata.add_model_data(pred_id, pred_dto);
       return 0;
     }
 
@@ -1294,8 +1223,10 @@ namespace dd
     {
       std::string action_type = call_dto->action->type;
 
-      APIData prev_data = cdata.get_model_data(prec_pred_id);
-      if (!prev_data.getv("predictions").size())
+      oatpp::Object<DTO::PredictBody> prev_data
+          = cdata.get_model_data(prec_pred_id);
+      auto predictions = prev_data->predictions;
+      if (predictions->empty())
         {
           // no prediction to work from
           chain_logger->info("no prediction to act on");
@@ -1311,8 +1242,9 @@ namespace dd
       // replace prev_data in cdata for prec_pred_id
       cdata.add_model_data(prec_pred_id, prev_data);
 
-      std::vector<APIData> vad = prev_data.getv("predictions");
-      if (vad.empty())
+      // TODO see if it is necessary
+      predictions = prev_data->predictions;
+      if (predictions->empty())
         {
           // no prediction to work from
           chain_logger->info("no prediction to act on after applying action "
@@ -1322,12 +1254,14 @@ namespace dd
 
       int classes_size = 0;
       int vals_size = 0;
-      for (size_t i = 0; i < vad.size(); i++)
+      for (size_t i = 0; i < predictions->size(); i++)
         {
-          int npred_classes = std::max(vad.at(i).getv("classes").size(),
-                                       vad.at(i).getv("vector").size());
+          auto pred = predictions->at(i);
+          size_t npred_classes
+              = std::max(pred->classes != nullptr ? pred->classes->size() : 0,
+                         pred->vector != nullptr ? pred->vector->size() : 0);
           classes_size += npred_classes;
-          vals_size += static_cast<int>(vad.at(i).has("vals"));
+          vals_size += static_cast<int>(pred->vals != nullptr);
         }
 
       if (!classes_size && !vals_size)
@@ -1342,11 +1276,12 @@ namespace dd
     }
 
     oatpp::Object<DTO::ChainBody>
-    chain(oatpp::Object<DTO::ServiceChain> input_dto, const std::string &cname)
+    chain(oatpp::Object<DTO::ServiceChain> input_dto, std::string cname)
     {
       oatpp::Object<DTO::ChainBody> out_dto;
       try
         {
+          cname = find_logger_name(cname);
           auto chain_logger = DD_SPDLOG_LOGGER(cname);
 
           std::chrono::time_point<std::chrono::system_clock> tstart
@@ -1432,10 +1367,7 @@ namespace dd
             out_dto = cdata.nested_chain_output();
           else
             {
-              // XXX(louis): fix this when chains will be entirely DTO
-              // (needs supervised output connector to DTO)
-              auto first_model_dto = cdata.get_model_data(cdata._first_id)
-                                         .createSharedDTO<DTO::PredictBody>();
+              auto first_model_dto = cdata.get_model_data(cdata._first_id);
               out_dto = DTO::ChainBody::createShared();
 
               for (auto &pred : *first_model_dto->predictions)

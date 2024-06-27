@@ -12,7 +12,7 @@ RUN rm -f /etc/apt/apt.conf.d/docker-clean; echo 'Binary::apt::APT::Keep-Downloa
 RUN --mount=type=cache,id=dede_cache_lib,sharing=locked,target=/var/cache/apt \
     --mount=type=cache,id=dede_apt_lib,sharing=locked,target=/var/lib/apt \
     export DEBIAN_FRONTEND=noninteractive && \
-    apt-get update -y && apt-get install -y python-dev apt-transport-https ca-certificates gnupg software-properties-common wget curl
+    apt-get update -y && apt-get install -y python3-dev apt-transport-https ca-certificates gnupg software-properties-common wget curl
 
 # CMake
 RUN curl https://apt.kitware.com/keys/kitware-archive-latest.asc | apt-key add -
@@ -185,6 +185,6 @@ RUN /opt/deepdetect/get_models.sh
 RUN /opt/deepdetect/check-dede-deps.sh
 
 WORKDIR /opt/deepdetect/build/main
-CMD /opt/deepdetect/start-dede.sh -host 0.0.0.0
+ENTRYPOINT ["/opt/deepdetect/start-dede.sh", "-host", "0.0.0.0"]
 VOLUME ["/data"]
 EXPOSE 8080

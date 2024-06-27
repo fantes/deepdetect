@@ -22,10 +22,12 @@
 #ifndef CHAIN_ACTIONS_H
 #define CHAIN_ACTIONS_H
 
+#include <memory>
+
 #include "apidata.h"
 #include "chain.h"
-#include <memory>
 #include "dd_spdlog.h"
+#include "dto/predict_out.hpp"
 
 namespace dd
 {
@@ -88,7 +90,16 @@ namespace dd
       return std::to_string(std::hash<std::string>{}(str));
     }
 
-    void apply(APIData &model_out, ChainData &cdata);
+    /** Apply an action to a model output.
+     * \param model_out Output of the previous model.
+     * \param cdata Chain data object containing all the output of previous
+     * models and actions. This method should add the action result to cdata
+     * using the `add_action_data()` method. If the action creates data that
+     * should appear in the result, they are stored in the "output" field. If
+     * the action creates data that should be used by the next model, they are
+     * stored in other fields, as handled in `services.h:chain_service()`.
+     * */
+    void apply(oatpp::Object<DTO::PredictBody> &model_out, ChainData &cdata);
 
     std::string _action_id;
     std::string _action_type;
@@ -110,7 +121,7 @@ namespace dd
     {
     }
 
-    void apply(APIData &model_out, ChainData &cdata);
+    void apply(oatpp::Object<DTO::PredictBody> &model_out, ChainData &cdata);
   };
 
   class ImgsRotateAction : public ChainAction
@@ -126,7 +137,25 @@ namespace dd
     {
     }
 
-    void apply(APIData &model_out, ChainData &cdata);
+    void apply(oatpp::Object<DTO::PredictBody> &model_out, ChainData &cdata);
+  };
+
+  /** Recompose origin image with inference result, for example in crop + GAN
+   * pipeline */
+  class ImgsCropRecomposeAction : public ChainAction
+  {
+  public:
+    ImgsCropRecomposeAction(oatpp::Object<DTO::ChainCall> call_dto,
+                            const std::shared_ptr<spdlog::logger> chain_logger)
+        : ChainAction(call_dto, chain_logger)
+    {
+    }
+
+    ~ImgsCropRecomposeAction()
+    {
+    }
+
+    void apply(oatpp::Object<DTO::PredictBody> &model_out, ChainData &cdata);
   };
 
   class ImgsDrawBBoxAction : public ChainAction
@@ -142,7 +171,7 @@ namespace dd
     {
     }
 
-    void apply(APIData &model_out, ChainData &cdata);
+    void apply(oatpp::Object<DTO::PredictBody> &model_out, ChainData &cdata);
   };
 
   class ClassFilter : public ChainAction
@@ -158,20 +187,21 @@ namespace dd
     {
     }
 
-    void apply(APIData &model_out, ChainData &cdata);
+    void apply(oatpp::Object<DTO::PredictBody> &model_out, ChainData &cdata);
   };
 
   template <typename T>
   inline void apply_action(oatpp::Object<DTO::ChainCall> call_dto,
-                           APIData &model_out, ChainData &cdata,
+                           oatpp::Object<DTO::PredictBody> &model_out,
+                           ChainData &cdata,
                            const std::shared_ptr<spdlog::logger> &chain_logger)
   {
     T act(call_dto, chain_logger);
     act.apply(model_out, cdata);
   }
 
-  typedef std::function<void(oatpp::Object<DTO::ChainCall>, APIData &,
-                             ChainData &,
+  typedef std::function<void(oatpp::Object<DTO::ChainCall>,
+                             oatpp::Object<DTO::PredictBody> &, ChainData &,
                              const std::shared_ptr<spdlog::logger> &)>
       action_function;
 
@@ -199,13 +229,17 @@ namespace dd
     {
     }
 
-    void apply_action(const std::string &action_type, APIData &model_out,
+    void apply_action(const std::string &action_type,
+                      oatpp::Object<DTO::PredictBody> &model_out,
                       ChainData &cdata,
                       const std::shared_ptr<spdlog::logger> &chain_logger);
 
     oatpp::Object<DTO::ChainCall> _call_dto;
   };
 
+  /** Add an action type to DeepDetect chains. The action transforms the output
+   * of a model. This output can then be used by another model or embedded in
+   * the API result. */
 #define CHAIN_ACTION(ActionName, ActionType)                                  \
   namespace                                                                   \
   {                                                                           \

@@ -1,6 +1,6 @@
 /**
  * DeepDetect
- * Copyright (c) 2021 Jolibrain SASU
+ * Copyright (c) 2023 Jolibrain SASU
  * Author: Louis Jean <louis.jean@jolibrain.com>
  *
  * This file is part of deepdetect.
@@ -19,32 +19,31 @@
  * along with deepdetect.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "ddtypes.hpp"
+#include "oatpp-swagger/Controller.hpp"
 
 namespace dd
 {
-  namespace DTO
+  class DedeSwaggerController : public oatpp::swagger::Controller
   {
-    namespace __class
+  public:
+    DedeSwaggerController(
+        const std::shared_ptr<oatpp::data::mapping::ObjectMapper>
+            &objectMapper,
+        const oatpp::Object<oatpp::swagger::oas3::Document> &document,
+        const std::shared_ptr<oatpp::swagger::Resources> &resources,
+        const oatpp::swagger::ControllerPaths &paths)
+        : oatpp::swagger::Controller(objectMapper, document, resources, paths)
     {
-      const oatpp::ClassId APIDataClass::CLASS_ID("APIData");
-
-      const oatpp::ClassId GpuIdsClass::CLASS_ID("GpuIds");
-
-      const oatpp::ClassId ImageClass::CLASS_ID("Image");
-
-      template <>
-      const oatpp::ClassId DTOVectorClass<double>::CLASS_ID("vector<double>");
-
-      template <>
-      const oatpp::ClassId
-          DTOVectorClass<uint8_t>::CLASS_ID("vector<uint8_t>");
-
-      template <>
-      const oatpp::ClassId DTOVectorClass<bool>::CLASS_ID("vector<bool>");
-
-      template class DTOVectorClass<double>;
-      template class DTOVectorClass<bool>;
     }
-  }
+
+  public:
+#include OATPP_CODEGEN_BEGIN(ApiController)
+
+    ENDPOINT("GET", "api-docs/oas-3.0.0.json", api2)
+    {
+      return api();
+    }
+
+#include OATPP_CODEGEN_END(ApiController)
+  };
 }

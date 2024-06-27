@@ -24,6 +24,17 @@
 
 #include <fstream>
 #include <vector>
+#include <algorithm>
+
+#include <boost/lexical_cast.hpp>
+#include <rapidjson/allocators.h>
+#include <rapidjson/stringbuffer.h>
+#include <rapidjson/reader.h>
+#include <rapidjson/writer.h>
+
+#include "apidata.h"
+#include "dd_types.h"
+#include "dd_spdlog.h"
 
 namespace dd
 {
@@ -79,6 +90,45 @@ namespace dd
                  : item.substr(start, end - start + 1);
     }
 
+    /** Cut string if it's too long and add "..." at the end of it.
+     * This is useful if we want to print a string but it might be very
+     * long.*/
+    inline std::string crop_string(const std::string &str, size_t crop_size)
+    {
+      if (str.size() > crop_size)
+        {
+          std::string cropped = str.substr(0, crop_size - 3);
+          return cropped + "...";
+        }
+      return str;
+    }
+
+    inline std::string jrender(const JDoc &jst)
+    {
+      rapidjson::StringBuffer buffer;
+      rapidjson::Writer<rapidjson::StringBuffer, rapidjson::UTF8<>,
+                        rapidjson::UTF8<>, rapidjson::CrtAllocator,
+                        rapidjson::kWriteNanAndInfFlag>
+          writer(buffer);
+      bool done = jst.Accept(writer);
+      if (!done)
+        throw DataConversionException("JSON rendering failed");
+      return buffer.GetString();
+    }
+
+    inline std::string jrender(const JVal &jval)
+    {
+      rapidjson::StringBuffer buffer;
+      rapidjson::Writer<rapidjson::StringBuffer, rapidjson::UTF8<>,
+                        rapidjson::UTF8<>, rapidjson::CrtAllocator,
+                        rapidjson::kWriteNanAndInfFlag>
+          writer(buffer);
+      bool done = jval.Accept(writer);
+      if (!done)
+        throw DataConversionException("JSON rendering failed");
+      return buffer.GetString();
+    }
+
     inline bool iequals(const std::string &a, const std::string &b)
     {
       unsigned int sz = a.size();
@@ -99,6 +149,43 @@ namespace dd
             count++;
         }
       return count == 1;
+    }
+
+    /** boost::lexical_cast<bool> but accept "true" and "false" */
+    inline bool parse_bool(const std::string &str)
+    {
+      try
+        {
+          return boost::lexical_cast<bool>(str);
+        }
+      catch (boost::bad_lexical_cast &)
+        {
+          if (str == "true")
+            return true;
+          else if (str == "false")
+            return false;
+          else
+            throw;
+        }
+      return false;
+    }
+
+    template <class ExceptCls>
+    inline void rethrow_exception(std::exception_ptr &eptr,
+                                  std::shared_ptr<spdlog::logger> logger)
+    {
+      try
+        {
+          if (eptr)
+            {
+              std::rethrow_exception(eptr);
+            }
+        }
+      catch (const std::exception &e)
+        {
+          logger->error(std::string("Caught error: ") + e.what());
+          throw ExceptCls(std::string("Caught error: ") + e.what());
+        }
     }
 
 #ifdef WIN32

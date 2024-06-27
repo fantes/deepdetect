@@ -22,6 +22,9 @@
 #ifndef UNSUPERVISEDOUTPUTCONNECTOR_H
 #define UNSUPERVISEDOUTPUTCONNECTOR_H
 
+#include <vector>
+#include <map>
+
 #include "dto/predict_out.hpp"
 
 namespace dd
@@ -119,6 +122,9 @@ namespace dd
         _bool_binarized = ad_out.get("bool_binarized").get<bool>();
       else if (ad_out.has("string_binarized"))
         _string_binarized = ad_out.get("string_binarized").get<bool>();
+
+      if (ad_out.has("encoding"))
+        _image_encoding = ad_out.get("encoding").get<std::string>();
     }
 
     void set_results(std::vector<UnsupervisedResult> &&results)
@@ -187,15 +193,19 @@ namespace dd
         }
     }
 
-    void finalize(const APIData &ad_in, APIData &ad_out, MLModel *mlm)
+    oatpp::Object<DTO::PredictBody>
+    finalize(const APIData &ad_in, const OutputConnectorConfig &config,
+             MLModel *mlm)
     {
       auto output_params = ad_in.createSharedDTO<DTO::OutputConnector>();
-      finalize(output_params, ad_out, mlm);
+      return finalize(output_params, config, mlm);
     }
 
-    void finalize(oatpp::Object<DTO::OutputConnector> output_params,
-                  APIData &ad_out, MLModel *mlm)
+    oatpp::Object<DTO::PredictBody>
+    finalize(oatpp::Object<DTO::OutputConnector> output_params,
+             const OutputConnectorConfig &config, MLModel *mlm)
     {
+      (void)config;
 #ifndef USE_SIMSEARCH
       (void)mlm;
 #endif
@@ -304,11 +314,11 @@ namespace dd
         }
 #endif
 
-      to_ad(ad_out, indexed_uris);
+      return to_dto(indexed_uris);
     }
 
-    void to_ad(APIData &out,
-               const std::unordered_set<std::string> &indexed_uris) const
+    oatpp::Object<DTO::PredictBody>
+    to_dto(const std::unordered_set<std::string> &indexed_uris) const
     {
 #ifndef USE_SIMSEARCH
       (void)indexed_uris;
@@ -321,8 +331,16 @@ namespace dd
           auto pred_dto = DTO::Prediction::createShared();
           pred_dto->uri = _vvres.at(i)._uri.c_str();
           if (_vvres.at(i)._images.size() != 0)
-            pred_dto->_images = _vvres.at(i)._images;
-          if (_bool_binarized)
+            {
+              // XXX: legacy
+              pred_dto->_images = _vvres.at(i)._images;
+
+              pred_dto->images = oatpp::Vector<DTO::DTOImage>::createShared();
+              for (auto &image : _vvres.at(i)._images)
+                pred_dto->images->push_back(
+                    DTO::VImage{ image, _image_encoding });
+            }
+          else if (_bool_binarized)
             pred_dto->vals
                 = DTO::DTOVector<bool>(std::move(_vvres.at(i)._bvals));
           else if (_string_binarized)
@@ -357,7 +375,7 @@ namespace dd
 #endif
           out_dto->predictions->push_back(pred_dto);
         }
-      out.add("dto", out_dto);
+      return out_dto;
     }
 
     std::unordered_map<std::string, int>
@@ -368,6 +386,8 @@ namespace dd
         = false; /**< boolean binary representation of output values. */
     bool _string_binarized = false; /**< boolean string as binary
                                        representation of output values. */
+    std::string _image_encoding
+        = ".png"; /**< encoding used for output images */
 #ifdef USE_SIMSEARCH
     int _search_nn = 10; /**< default nearest neighbors per search. */
 #endif

@@ -77,7 +77,7 @@ namespace dd
 
     int train(const APIData &ad, APIData &out);
 
-    int predict(const APIData &ad, APIData &out);
+    oatpp::Object<DTO::PredictBody> predict(const APIData &ad_in);
 
     int test(const APIData &ad, TInputConnectorStrategy &inputc,
              TorchMultipleDataset &datasets, int batch_size, APIData &out);
@@ -90,7 +90,8 @@ namespace dd
                                         const at::Tensor &targ_labels,
                                         const at::Tensor &bboxes_tensor,
                                         const at::Tensor &labels_tensor,
-                                        const at::Tensor &score_tensor);
+                                        const at::Tensor &score_tensor,
+                                        float overlap_threshold);
 
   public:
     unsigned int _nclasses = 0; /**< number of classes*/
@@ -111,9 +112,15 @@ namespace dd
     bool _segmentation = false;   /**< select segmentation type problem */
     bool _ctc = false;            /**< select OCR type problem */
     bool _multi_label = false;    /**< whether model outputs multiple labels */
-    std::string _loss = "";       /**< selected loss*/
+    bool _concurrent_predict = true; /**< allow concurrent predicts */
+    std::string _loss = "";          /**< selected loss*/
     double _reg_weight
         = 1; /**< for detection models, weight for bbox regression loss. */
+
+    std::mutex _net_mutex; /**< mutex around net, e.g. no concurrent predict
+                              calls as it can use more gpu memory than
+                              initially expected. Use batches instead. This is
+                              only used if concurrent_predict is disabled. */
 
     APIData _template_params; /**< template parameters, for recurrent and
                                  native models*/
@@ -157,6 +164,9 @@ namespace dd
      */
     double unscale(double val, unsigned int k,
                    const TInputConnectorStrategy &inputc);
+
+    /** print and update model stats */
+    void compute_and_print_model_info();
   };
 }
 

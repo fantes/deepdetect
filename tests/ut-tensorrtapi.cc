@@ -37,7 +37,6 @@ static std::string not_found_str
     = "{\"status\":{\"code\":404,\"msg\":\"NotFound\"}}";
 
 static std::string squeez_repo = "../examples/trt/squeezenet_ssd_trt/";
-static std::string refinedet_repo = "../examples/trt/faces_512/";
 static std::string squeezv1_repo = "../examples/trt/squeezenet_v1/";
 static std::string resnet_onnx_repo = "../examples/trt/resnet_onnx_trt/";
 static std::string yolox_onnx_repo = "../examples/trt/yolox_onnx_trt_nowrap/";
@@ -92,55 +91,6 @@ TEST(tensorrtapi, service_predict_best)
   ASSERT_EQ(ok_str, joutstr);
   ASSERT_TRUE(!fileops::file_exists(squeezv1_repo + "net_tensorRT.proto"));
   ASSERT_TRUE(!fileops::file_exists(squeezv1_repo + "TRTengine_arch"
-                                    + get_trt_archi() + "_fp32_bs1"));
-}
-
-TEST(tensorrtapi, service_predict_refinedet)
-{
-  // create service
-  JsonAPI japi;
-  std::string sname = "imgserv";
-  std::string jstr
-      = "{\"mllib\":\"tensorrt\",\"description\":\"refinedet\",\"type\":"
-        "\"supervised\",\"model\":{\"repository\":\""
-        + refinedet_repo
-        + "\"},\"parameters\":{\"input\":{\"connector\":\"image\",\"height\":"
-          "512,\"width\":512},\"mllib\":{\"nclasses\":2,\"datatype\":\"fp16\","
-          "\"maxBatchSize\":1,\"maxWorkSpaceSize\":256}}}";
-  std::string joutstr = japi.jrender(japi.service_create(sname, jstr));
-  ASSERT_EQ(created_str, joutstr);
-
-  // predict
-  std::string jpredictstr
-      = "{\"service\":\"imgserv\",\"parameters\":{\"input\":{\"height\":512,"
-        "\"width\":512},\"output\":{\"bbox\":true}},\"data\":[\""
-        + squeez_repo + "face.jpg\"]}";
-  joutstr = japi.jrender(japi.service_predict(jpredictstr));
-  JDoc jd;
-  std::cout << "joutstr=" << joutstr << std::endl;
-  jd.Parse<rapidjson::kParseNanAndInfFlag>(joutstr.c_str());
-  ASSERT_TRUE(!jd.HasParseError());
-  ASSERT_EQ(200, jd["status"]["code"]);
-  ASSERT_TRUE(jd["body"]["predictions"].IsArray());
-
-  // predict with wrong input size
-  jpredictstr
-      = "{\"service\":\"imgserv\",\"parameters\":{\"input\":{\"height\":300,"
-        "\"width\":300},\"output\":{\"bbox\":true}},\"data\":[\""
-        + squeez_repo + "face.jpg\"]}";
-  joutstr = japi.jrender(japi.service_predict(jpredictstr));
-  std::cout << "joutstr=" << joutstr << std::endl;
-  jd.Parse<rapidjson::kParseNanAndInfFlag>(joutstr.c_str());
-  ASSERT_TRUE(!jd.HasParseError());
-  ASSERT_EQ(400, jd["status"]["code"]);
-
-  ASSERT_TRUE(fileops::file_exists(refinedet_repo + "TRTengine_arch"
-                                   + get_trt_archi() + "_fp32_bs1"));
-  jstr = "{\"clear\":\"lib\"}";
-  joutstr = japi.jrender(japi.service_delete(sname, jstr));
-  ASSERT_EQ(ok_str, joutstr);
-  ASSERT_TRUE(!fileops::file_exists(refinedet_repo + "net_tensorRT.proto"));
-  ASSERT_TRUE(!fileops::file_exists(refinedet_repo + "TRTengine_arch"
                                     + get_trt_archi() + "_fp32_bs1"));
 }
 
@@ -321,6 +271,31 @@ TEST(tensorrtapi, service_predict_gan_onnx)
   ASSERT_TRUE(jd["body"]["predictions"][0]["vals"].IsArray());
   ASSERT_EQ(jd["body"]["predictions"][0]["vals"].Size(), 360 * 360 * 3);
 
+  // predict to image
+  jpredictstr
+      = "{\"service\":\"" + sname
+        + "\",\"parameters\":{\"input\":{\"height\":360,"
+          "\"width\":360,\"rgb\":true,\"scale\":0.00392,\"mean\":[0.5,0.5,0.5]"
+          ",\"std\":[0.5,0.5,0.5]},\"output\":{\"image\":true},\"mllib\":{"
+          "\"extract_layer\":\"last\"}},\"data\":[\""
+        + cyclegan_onnx_repo + "horse.jpg\"]}";
+  joutstr = japi.jrender(japi.service_predict(jpredictstr));
+  jd = JDoc();
+  // std::cout << "joutstr=" << joutstr << std::endl;
+  jd.Parse<rapidjson::kParseNanAndInfFlag>(joutstr.c_str());
+  ASSERT_TRUE(!jd.HasParseError());
+  ASSERT_EQ(200, jd["status"]["code"]);
+  ASSERT_TRUE(jd["body"]["predictions"].IsArray());
+  ASSERT_TRUE(jd["body"]["predictions"][0]["images"].IsArray());
+  ASSERT_EQ(jd["body"]["predictions"][0]["images"].Size(), 1);
+  // png image
+  std::string base64_img
+      = jd["body"]["predictions"][0]["images"][0].GetString();
+  // may be small differences between machines, versions of libpng/jpeg?
+  ASSERT_NEAR(base64_img.size(), 388292, 100);
+  // cv::imwrite("onnx_gan_base64.jpg", cv_utils::base64_to_image(base64_img));
+
+  // delete
   ASSERT_TRUE(fileops::file_exists(cyclegan_onnx_repo + "TRTengine_arch"
                                    + get_trt_archi() + "_fp16_bs1"));
 

@@ -4,12 +4,12 @@ cmake_minimum_required(VERSION 3.10)
 
 option(RELEASE "release mode" OFF)
 option(WARNING "enable warning" ON)
-option(USE_CAFFE "build caffe backend" ON)
+option(USE_CAFFE "build caffe backend" OFF)
 option(USE_CAFFE_DEBUG "enable caffe debug" OFF)
 option(USE_CAFFE2 "build caffe2 backend" OFF)
 option(USE_TF "use TF backend" OFF)
 option(USE_NCNN "use NCNN backend" OFF)
-option(USE_TORCH "use libtorch backend" OFF)
+option(USE_TORCH "use libtorch backend" ON)
 option(USE_HDF5 "use HDF5" ON)
 option(USE_TENSORRT "use TensorRT backend" OFF)
 option(USE_TENSORRT_OSS "alias of USE_TENSORRT" OFF)
@@ -24,6 +24,7 @@ option(USE_FAISS "use FAISS as indexer" ON)
 option(BUILD_SPDLOG "build SPDLOG instead of using system library" ON)
 option(BUILD_PROTOBUF "build PROTOBUF instead of using system library" ON)
 option(USE_BOOST_BACKTRACE "use boost backtrace" ON)
+option(USE_OPENMP "use OpenMP" ON)
 
 if (USE_CAFFE)
   add_definitions(-DUSE_CAFFE)
@@ -93,8 +94,37 @@ if (NOT EXISTS ${CMAKE_BINARY_DIR}/src)
 	COMMAND  bash -c "mkdir ${CMAKE_BINARY_DIR}/src")
 endif()
 
-set(CMAKE_CXX_FLAGS "-g -O2 -Wall -Wextra -fopenmp -fPIC -std=c++14 -Wl,--no-as-needed -ltcmalloc_minimal")
-set(CMAKE_CXX_STANDARD 14)
+if (USE_OPENMP)
+  if (APPLE)
+    set(FOPENMP "-Xclang -fopenmp")
+    find_library(OPENMP_LIBRARIES REQUIRED
+      NAMES omp libomp
+      HINTS /opt/homebrew/Cellar/libomp/*/lib/)
+
+    message(STATUS "OpenMP location: ${OPENMP_LIBRARIES}")
+    find_path(OPENMP_INCLUDE_DIRS REQUIRED
+      NAMES omp.h
+      HINTS /opt/homebrew/Cellar/libomp/*/include/)
+    message(STATUS "OpenMP header ${OPENMP_INCLUDE_DIRS}")
+    include_directories(SYSTEM ${OPENMP_INCLUDE_DIRS})
+  else()
+    set(FOPENMP "-fopenmp")
+  endif()
+else()
+  set(FOPENMP "")
+endif()
+
+if (APPLE)
+    set(CMAKE_CXX_FLAGS "-g -O2 -Wall -Wextra ${FOPENMP} -fPIC -std=c++17")
+
+    message(STATUS "Apple build: CUDA is disabled")
+    set(USE_CUDNN OFF)
+    set(USE_CUDA_CV OFF)
+else()
+    set(CMAKE_CXX_FLAGS "-g -O2 -Wall -Wextra ${FOPENMP} -fPIC -std=c++17 -Wl,--no-as-needed -ltcmalloc_minimal")
+endif()
+
+set(CMAKE_CXX_STANDARD 17)
 add_definitions("-DUSE_OPENCV" "-DUSE_LMDB")
 
 if(WARNING)
@@ -127,6 +157,25 @@ if (USE_JSON_API)
   string(APPEND CMAKE_CXX_FLAGS " -DUSE_JSON_API")
 endif()
 
+# VARIANT
+
+if (APPLE)
+    # Variant is not on brew
+    set(VARIANT_VERSION v1.2.0)
+    message(STATUS "Download Variant library ${VARIANT_VERSION}")
+    ExternalProject_Add(
+        variant
+        PREFIX variant
+        UPDATE_DISCONNECTED 1
+        URL https://github.com/mapbox/variant/archive/refs/tags/${VARIANT_VERSION}.tar.gz
+        URL_HASH SHA256=7059f4420d504c4bc96f8a462a0f6d029c5be914ba55cc030a0a773366dd7bc8
+        CONFIGURE_COMMAND ""
+        BUILD_COMMAND ""
+        INSTALL_COMMAND ""
+    )
+    set(VARIANT_INCLUDE_DIRS "${CMAKE_BINARY_DIR}/variant/src/variant/include/")
+endif()
+
 # PROTOBUF
 
 # use protobuf same version as pytorch one
@@ -150,7 +199,13 @@ if (BUILD_PROTOBUF)
     set(PROTOBUF_INCLUDE_DIR ${CMAKE_BINARY_DIR}/protobuf/src/protobuf/src)
     set(PROTOBUF_LIB_DIR ${CMAKE_BINARY_DIR}/protobuf/src/protobuf-build/)
     set(PROTOBUF_PROTOC ${PROTOBUF_LIB_DIR}/protoc)
-    set(PROTOBUF_LIB_DEPS ${PROTOBUF_LIB_DIR}/libprotobuf.so ${PROTOBUF_LIB_DIR}/libprotoc.so ${PROTOBUF_LIB_DIR}/libprotobuf-lite.so)
+
+    if (APPLE)
+      set(PROTOBUF_LIB_DEPS ${PROTOBUF_LIB_DIR}/libprotobuf.dylib ${PROTOBUF_LIB_DIR}/libprotoc.dylib ${PROTOBUF_LIB_DIR}/libprotobuf-lite.dylib)
+    else()
+      set(PROTOBUF_LIB_DEPS ${PROTOBUF_LIB_DIR}/libprotobuf.so ${PROTOBUF_LIB_DIR}/libprotoc.so ${PROTOBUF_LIB_DIR}/libprotobuf-lite.so)
+    endif()
+
     link_directories(${PROTOBUF_LIB_DIR})
     include_directories(SYSTEM ${PROTOBUF_INCLUDE_DIR})
 else()
@@ -164,6 +219,17 @@ else()
     set(PROTOBUF_INCLUDE_DIR ${Protobuf_INCLUDE_DIRS})
     set(PROTOBUF_LIB_DEPS protobuf::libprotobuf)
     add_custom_target(protobuf)
+
+    # absl for protobuf 22+
+    if (${Protobuf_VERSION} VERSION_GREATER_EQUAL 4.22.0)
+      message(STATUS "Add Abseil dependency required by Protobuf V${Protobuf_VERSION}")
+      if(NOT TARGET absl::strings)
+        find_package(absl CONFIG)
+      endif()
+      set_target_properties(protobuf::libprotobuf PROPERTIES
+        INTERFACE_LINK_LIBRARIES "absl::absl_check;absl::absl_log;absl::algorithm;absl::base;absl::bind_front;absl::bits;absl::btree;absl::cleanup;absl::cord;absl::core_headers;absl::debugging;absl::die_if_null;absl::dynamic_annotations;absl::flags;absl::flat_hash_map;absl::flat_hash_set;absl::function_ref;absl::hash;absl::layout;absl::log_initialize;absl::log_severity;absl::memory;absl::node_hash_map;absl::node_hash_set;absl::optional;absl::span;absl::status;absl::statusor;absl::strings;absl::synchronization;absl::time;absl::type_traits;absl::utility;absl::variant"
+      )
+    endif()
 endif()
 
 file(
@@ -276,7 +342,7 @@ else()
 endif()
 
 # CUDA validation
-if (NOT CUDA_FOUND)
+if (NOT APPLE AND NOT CUDA_FOUND)
   if (USE_TENSORRT)
       message(FATAL, "USE_TENSORRT=ON needs CUDA installed")
   endif()
@@ -333,9 +399,9 @@ if (USE_CAFFE OR USE_TORCH)
     endif()
     if(USE_FAISS)
       if (USE_FAISS_CPU_ONLY)
-	    set(CONFIGURE_OPTS "-DFAISS_ENABLE_GPU=OFF" "-DBUILD_TESTING=OFF")
+	    set(CONFIGURE_OPTS "-DFAISS_ENABLE_GPU=OFF" "-DBUILD_TESTING=OFF" "-DFAISS_ENABLE_PYTHON=OFF")
       else()
-        set(CONFIGURE_OPTS "-DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc" "-DBUILD_TESTING=OFF")
+        set(CONFIGURE_OPTS "-DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc" "-DBUILD_TESTING=OFF" "-DFAISS_ENABLE_PYTHON=OFF")
       endif()
       message(STATUS "Fetching FAISS")
       add_definitions(-DUSE_FAISS)
@@ -374,9 +440,25 @@ if (CUDA_FOUND)
   if (USE_CUDNN)
     set(CUDA_LIB_DEPS ${CUDA_LIB_DEPS} ${CUDNN_LIBRARY})
   endif()
+  if ("${CUDA_ARCH}" STREQUAL "")
+    message(STATUS "CUDA_ARCH not set, using detected set ${NVCC_ARCH_EXTRA}")
+
+    # Convert arch to correct format
+    foreach(arch ${NVCC_ARCH_EXTRA})
+      string(REGEX REPLACE "(.*)(.)" "\\1.\\2" arch_with_dots "${arch}")
+      string(APPEND CUDA_ARCH "${arch_with_dots};")
+    endforeach()
+    # remove last semi-colon if any
+    string(REGEX REPLACE ".$" "" CUDA_ARCH "${CUDA_ARCH}")
+  endif()
+  message(STATUS "CUDA_ARCH=${CUDA_ARCH}")
 else()
   set(CUDA_LIB_DEPS "")
-  add_definitions(-DCPU_ONLY)
+
+  if (NOT APPLE)
+    # XXX: On Apple platforms MPS can be used, so we'd need a different condition
+    add_definitions(-DCPU_ONLY)
+  endif()
 endif()
 
 if (USE_DLIB)
@@ -648,7 +730,7 @@ elseif(USE_CAFFE)
 
   message(STATUS "include_dirs : ${INCLUDE_DIRS}")
 
-  set(CAFFE_DD_TARBALL_HASH "bf2d6dab6bc187be349377f4baa97f867c6044186d7ad85cd72a56cd1ad30e35")
+  set(CAFFE_DD_TARBALL_HASH "6d340fff2213c37886e058d188c9b54458a0747422d54bc294db4e5029a68aa0")
 
   ExternalProject_Add(
     caffe_dd
@@ -668,7 +750,7 @@ elseif(USE_CAFFE)
         echo "INCLUDE_DIRS+=${SPDLOG_INCLUDE_DIR}" >> Makefile.config &&
         echo "INCLUDE_DIRS+=${PROTOBUF_INCLUDE_DIR}" >> Makefile.config &&
         echo "INCLUDE_DIRS+=${OpenCV_INCLUDE_DIRS}" >> Makefile.config &&
-        echo "CUDA_ARCH:=${CUDA_ARCH}" >> Makefile.config &&
+        echo "CUDA_ARCH:=${CUDA_ARCH_FLAGS}" >> Makefile.config &&
         echo "LIBRARIES+=${SPDLOG_CAFFE_LIB_DEPS}" >> Makefile.config &&
         echo "LIBRARIES+=${OpenCV_LIBS}" >> Makefile.config &&
         echo "LIBRARY_DIRS+=${SPDLOG_LIB_DIR}" >> Makefile.config &&
@@ -766,54 +848,89 @@ endif()
 
 # Torch
 if (USE_TORCH)
-
-  set(CMAKE_EXE_LINKER_FLAGS "-Wl,--no-as-needed")
+  if (!APPLE)
+    set(CMAKE_EXE_LINKER_FLAGS "-Wl,--no-as-needed")
+  endif()
 
   set(PYTORCH_PATCHES_PATH ${CMAKE_BINARY_DIR}/patches/pytorch)
 
   set(PYTORCH_PATCHES
     ${PYTORCH_PATCHES_PATH}/pytorch_15_compile.patch
     ${PYTORCH_PATCHES_PATH}/pytorch_113_new_logger.patch
-    ${PYTORCH_PATCHES_PATH}/pytorch_19_use_new_logger.patch
+    ${PYTORCH_PATCHES_PATH}/pytorch_23_use_new_logger.patch
+    ${PYTORCH_PATCHES_PATH}/pytorch_23_cloneable.patch
   )
+  if (APPLE)
+    list(APPEND PYTORCH_PATCHES ${PYTORCH_PATCHES_PATH}/pytorch_113_apple_includes.patch)
+  endif()
 
   message(STATUS "Configuring libtorch")
   add_definitions(-DUSE_TORCH)
 
   if (NOT TORCH_LOCATION)
-    set(PYTORCH_COMMIT v1.13.0)
+    set(PYTORCH_COMMIT v2.3.0)
     set(PYTORCH_COMPLETE ${CMAKE_BINARY_DIR}/CMakeFiles/pytorch-complete)
 
-    if(USE_TORCH_CPU_ONLY)
-      set(PYTORCH_USE_CUDA 0)
+    if (APPLE)
+      if(USE_TORCH_CPU_ONLY)
+        set(PYTORCH_USE_MPS 0)
+      else()
+        set(PYTORCH_USE_MPS 1)
+        add_definitions("-DUSE_MPS")
+      endif()
+
+      message(STATUS "PROTOBUF_PROTOC_EXECUTABLE=${PROTOBUF_PROTOC} PROTOBUF_INCLUDE_DIRS=${PROTOBUF_INCLUDE_DIR} PROTOBUF_LIBRARIES=${PROTOBUF_LIB_DEPS}")
+      ExternalProject_Add(
+        pytorch
+        PREFIX pytorch
+        GIT_REPOSITORY https://github.com/pytorch/pytorch.git
+        GIT_TAG ${PYTORCH_COMMIT}
+        GIT_CONFIG advice.detachedHead=false
+        UPDATE_DISCONNECTED 1
+        PATCH_COMMAND "" test -f ${PYTORCH_COMPLETE} && echo Skipping || git apply ${PYTORCH_PATCHES} && echo Applying ${PYTORCH_PATCHES}
+        CONFIGURE_COMMAND "" cd ${CMAKE_BINARY_DIR}/pytorch/src/pytorch/third_party/fmt/ && git checkout 7.1.0
+        BUILD_COMMAND ""
+        COMMAND test -f ${PYTORCH_COMPLETE} && echo Skipping || ${CMAKE_COMMAND} -E env PATH=${PROTOBUF_LIB_DIR}:${PROTOBUF_INCLUDE_DIR}:$ENV{PATH} BUILD_CUSTOM_PROTOBUF=0 BUILD_TEST=0 USE_MPS=${PYTORCH_USE_MPS} USE_DDLOG=1 USE_TENSORRT=0 "CMAKE_CXX_FLAGS=-isystem ${SPDLOG_INCLUDE_DIR} -isystem ${PROTOBUF_INCLUDE_DIR}" "CMAKE_CUDA_FLAGS=-isystem ${SPDLOG_INCLUDE_DIR} -isystem ${PROTOBUF_INCLUDE_DIR}" CMAKE_PREFIX_PATH="${PROTOBUF_LIB_DIR}/cmake" MAX_JOBS=8 python3 ../pytorch/tools/build_libtorch.py
+        INSTALL_COMMAND ""
+        DEPENDS spdlog protobuf
+      )
+      set(TORCH_BINARY_LOCATION ${CMAKE_BINARY_DIR}/pytorch/src/pytorch-build/build)
     else()
-      set(PYTORCH_USE_CUDA 1)
+      if(USE_TORCH_CPU_ONLY)
+        set(PYTORCH_USE_CUDA 0)
+      else()
+        set(PYTORCH_USE_CUDA 1)
+      endif()
+
+      file(WRITE ${CMAKE_BINARY_DIR}/build_pytorch.sh "set -x\n${CMAKE_COMMAND} -E env PATH=${PROTOBUF_LIB_DIR}:$ENV{PATH} BUILD_CUSTOM_PROTOBUF=0 GLIBCXX_USE_CXX11_ABI=1 BUILD_TEST=0 USE_CUDA=${PYTORCH_USE_CUDA}  BUILD_CAFFE2=1 BUILD_CAFFE2_OPS=1 BUILD_CAFFE2_MOBILE=0 USE_DDLOG=1 USE_TENSORRT=0 CAFFE2_LINK_LOCAL_PROTOBUF=0 \"CMAKE_CXX_FLAGS=-isystem ${SPDLOG_INCLUDE_DIR} -isystem ${PROTOBUF_INCLUDE_DIR} -isystem /usr/lib/x86_64-linux-gnu/openmpi/include\" \"CMAKE_CUDA_FLAGS=-isystem ${SPDLOG_INCLUDE_DIR} -isystem ${PROTOBUF_INCLUDE_DIR} -isystem /usr/lib/x86_64-linux-gnu/openmpi/include\" TORCH_CUDA_ARCH_LIST=\"${CUDA_ARCH}\" \"CMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc\" CMAKE_PREFIX_PATH=${PROTOBUF_LIB_DIR}/cmake MAX_JOBS=8 python3 ../pytorch/tools/build_libtorch.py")
+      ExternalProject_Add(
+        pytorch
+        PREFIX pytorch
+        GIT_REPOSITORY https://github.com/pytorch/pytorch.git
+        GIT_TAG ${PYTORCH_COMMIT}
+        GIT_CONFIG advice.detachedHead=false
+        UPDATE_DISCONNECTED 1
+        PATCH_COMMAND "" test -f ${PYTORCH_COMPLETE} && echo Skipping || git apply ${PYTORCH_PATCHES} && echo Applying ${PYTORCH_PATCHES}
+        CONFIGURE_COMMAND "" cd ${CMAKE_BINARY_DIR}/pytorch/src/pytorch/third_party/fmt/ && git checkout 7.1.0
+        BUILD_COMMAND ""
+        COMMAND test -f ${PYTORCH_COMPLETE} && echo Skipping || sh ${CMAKE_BINARY_DIR}/build_pytorch.sh
+        INSTALL_COMMAND ""
+        DEPENDS spdlog protobuf
+      )
     endif()
-
-    ExternalProject_Add(
-      pytorch
-      PREFIX pytorch
-      GIT_REPOSITORY https://github.com/pytorch/pytorch.git
-      GIT_TAG ${PYTORCH_COMMIT}
-      GIT_CONFIG advice.detachedHead=false
-      UPDATE_DISCONNECTED 1
-      PATCH_COMMAND "" test -f ${PYTORCH_COMPLETE} && echo Skipping || git apply ${PYTORCH_PATCHES} && echo Applying ${PYTORCH_PATCHES}
-      CONFIGURE_COMMAND ""
-      BUILD_COMMAND ""
-      COMMAND test -f ${PYTORCH_COMPLETE} && echo Skipping || ${CMAKE_COMMAND} -E env PATH=${PROTOBUF_LIB_DIR}:$ENV{PATH} BUILD_CUSTOM_PROTOBUF=0 GLIBCXX_USE_CXX11_ABI=1 BUILD_TEST=0 USE_CUDA=${PYTORCH_USE_CUDA}  BUILD_CAFFE2=1 BUILD_CAFFE2_OPS=1 BUILD_CAFFE2_MOBILE=0 USE_DDLOG=1 USE_TENSORRT=0 CAFFE2_LINK_LOCAL_PROTOBUF=0 "CMAKE_CXX_FLAGS=-isystem ${SPDLOG_INCLUDE_DIR} -isystem ${PROTOBUF_INCLUDE_DIR}" "CMAKE_CUDA_FLAGS=-isystem ${SPDLOG_INCLUDE_DIR} -isystem ${PROTOBUF_INCLUDE_DIR}  ${CUDA_ARCH}" CMAKE_PREFIX_PATH=${PROTOBUF_LIB_DIR}/cmake MAX_JOBS=8 python3 ../pytorch/tools/build_libtorch.py
-      INSTALL_COMMAND ""
-      DEPENDS spdlog protobuf
-    )
-
     set(TORCH_LOCATION ${CMAKE_BINARY_DIR}/pytorch/src/pytorch/torch)
   endif()
 
-  set(TORCH_LIB_DEPS ${TORCH_LOCATION}/lib/libtorch.so ${TORCH_LOCATION}/lib/libtorch_cpu.so ${TORCH_LOCATION}/lib/libc10.so -llmdb)
-
-  if (USE_TORCH_CPU_ONLY)
-    list(APPEND TORCH_LIB_DEPS ${TORCH_LOCATION}/lib/libtorch_cpu.so iomp5)
+  if (APPLE)
+    set(TORCH_LIB_DEPS ${TORCH_BINARY_LOCATION}/lib/libtorch.dylib ${TORCH_BINARY_LOCATION}/lib/libtorch_cpu.dylib ${TORCH_BINARY_LOCATION}/lib/libc10.dylib ${TORCH_BINARY_LOCATION}/lib/libtorch_global_deps.dylib -llmdb)
   else()
-    list(APPEND TORCH_LIB_DEPS ${TORCH_LOCATION}/lib/libc10_cuda.so ${TORCH_LOCATION}/lib/libtorch_cuda.so)
+    set(TORCH_LIB_DEPS ${TORCH_LOCATION}/lib/libtorch.so ${TORCH_LOCATION}/lib/libtorch_cpu.so ${TORCH_LOCATION}/lib/libc10.so -llmdb)
+
+    if (USE_TORCH_CPU_ONLY)
+      list(APPEND TORCH_LIB_DEPS iomp5)
+    else()
+      list(APPEND TORCH_LIB_DEPS ${TORCH_LOCATION}/lib/libc10_cuda.so ${TORCH_LOCATION}/lib/libtorch_cuda.so)
+    endif()
   endif()
 
   set(TORCH_INC_DIR ${TORCH_LOCATION}/include/ ${TORCH_LOCATION}/include/torch/csrc/api/include/ ${CMAKE_BINARY_DIR}/pytorch/src/pytorch/torch/include/torch/csrc/api/include ${TORCH_LOCATION}/.. ${CMAKE_BINARY_DIR}/src)
@@ -821,7 +938,7 @@ if (USE_TORCH)
 
   # TORCH VISION
   message(STATUS "Configuring Pytorch Vision")
-  set(PYTORCH_VISION_COMMIT "v0.14.0") # 0.14.0 & torch 1.13.0
+  set(PYTORCH_VISION_COMMIT "v0.18.0") # 0.18.0 & torch 2.3.0
   set(PYTORCH_VISION_PATCHES_PATH ${CMAKE_BINARY_DIR}/patches/pytorch/vision)
   # set(PYTORCH_VISION_PATCHES
   #   ${PYTORCH_VISION_PATCHES_PATH}/xxx.patch # add patches here
@@ -830,13 +947,7 @@ if (USE_TORCH)
   set(PYTORCH_VISION_COMPLETE ${CMAKE_BINARY_DIR}/CMakeFiles/pytorch_vision-complete)
   set(TORCHVISION_LOCATION "${CMAKE_BINARY_DIR}/pytorch_vision/src/pytorch_vision-install")
 
-  set(PYTORCH_VISION_FLAGS
-      -DWITH_CUDA=${PYTORCH_USE_CUDA} -DCMAKE_PREFIX_PATH=${TORCH_LOCATION} -DCMAKE_INSTALL_PREFIX=${TORCHVISION_LOCATION}
-      -DCMAKE_INCLUDE_PATH=${PROTOBUF_INCLUDE_DIR} -DCMAKE_LIBRARY_PATH=${PROTOBUF_LIB_DIR}
-      "-DCMAKE_CXX_FLAGS=-isystem ${CMAKE_BINARY_DIR}/pytorch/src/pytorch/ -isystem ${SPDLOG_INCLUDE_DIR} -isystem ${PROTOBUF_INCLUDE_DIR}"
-      "-DCMAKE_CUDA_FLAGS=-isystem ${CMAKE_BINARY_DIR}/pytorch/src/pytorch/ -isystem ${SPDLOG_INCLUDE_DIR} -isystem ${PROTOBUF_INCLUDE_DIR} ${CUDA_ARCH}"
-      "-DCMAKE_CUDA_STANDARD=14"
-      -DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc)
+  file(WRITE ${CMAKE_BINARY_DIR}/build_pytorch_vision.sh "sh ${CMAKE_SOURCE_DIR}/cmake/build_external.sh PYTORCH_VISION ${CMAKE_BINARY_DIR}/pytorch_vision ${PYTORCH_VISION_COMPLETE} src/pytorch_vision src/pytorch_vision-build ${N} \"install\" ${CMAKE_COMMAND} ${PYTORCH_VISION_FLAGS} -DWITH_CUDA=${PYTORCH_USE_CUDA} -DCMAKE_PREFIX_PATH=${TORCH_LOCATION} -DCMAKE_INSTALL_PREFIX=${TORCHVISION_LOCATION} -DCMAKE_INCLUDE_PATH=${PROTOBUF_INCLUDE_DIR} -DCMAKE_LIBRARY_PATH=${PROTOBUF_LIB_DIR} \"-DCMAKE_CXX_FLAGS=-isystem ${CMAKE_BINARY_DIR}/pytorch/src/pytorch/ -isystem ${SPDLOG_INCLUDE_DIR} -isystem ${PROTOBUF_INCLUDE_DIR}\" \"-DCMAKE_CUDA_FLAGS=-isystem ${CMAKE_BINARY_DIR}/pytorch/src/pytorch/ -isystem ${SPDLOG_INCLUDE_DIR} -isystem ${PROTOBUF_INCLUDE_DIR}\" \"-DCMAKE_CUDA_STANDARD=17\" \"-DTORCH_CUDA_ARCH_LIST=${CUDA_ARCH}\" -DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc")
 
   ExternalProject_Add(
     pytorch_vision
@@ -847,7 +958,7 @@ if (USE_TORCH)
     UPDATE_DISCONNECTED 1
     PATCH_COMMAND "" #test -f ${PYTORCH_VISION_COMPLETE} && echo Skipping || git apply ${PYTORCH_VISION_PATCHES} && echo Applying ${PYTORCH_VISION_PATCHES}
     CONFIGURE_COMMAND ""
-    BUILD_COMMAND sh ${CMAKE_SOURCE_DIR}/cmake/build_external.sh PYTORCH_VISION ${CMAKE_BINARY_DIR}/pytorch_vision ${PYTORCH_VISION_COMPLETE} src/pytorch_vision src/pytorch_vision-build ${N} "install" ${CMAKE_COMMAND} ${PYTORCH_VISION_FLAGS}
+    BUILD_COMMAND sh ${CMAKE_BINARY_DIR}/build_pytorch_vision.sh
     INSTALL_COMMAND ""
     DEPENDS protobuf pytorch
   )
@@ -888,7 +999,7 @@ if (USE_XGBOOST)
       CMAKE_ARGS
         -DPLUGIN_UPDATER_GPU=ON
         -DCUB_DIRECTORY=${CMAKE_BINARY_DIR}/xgboost_cub/src/xgboost_cub
-        -DCUDA_NVCC_FLAGS="-Xcompiler -fPIC --expt-extended-lambda $CUDA_ARCH"
+        -DCUDA_NVCC_FLAGS="-Xcompiler -fPIC --expt-extended-lambda $CUDA_ARCH_FLAGS"
       INSTALL_COMMAND ""
       DEPENDS xgboost_cub
     )
@@ -961,7 +1072,7 @@ if (USE_TENSORRT)
 
     if (NOT TENSORRT_VERSION)
         if (EXISTS "${TRTTESTDIR}/libnvinfer.so.8")
-            set(TENSORRT_VERSION 8.4.3)
+            set(TENSORRT_VERSION v8.6.1)
             message(STATUS "Found TensorRT libraries version 8")
         else()
             message(FATAL_ERROR "No supported TensorRT version found")
@@ -982,10 +1093,8 @@ if (USE_TENSORRT)
 
 	set(TRT_PATCHES_PATH ${CMAKE_BINARY_DIR}/patches/trt)
 	set(TRT_PATCHES
-      ${TRT_PATCHES_PATH}/0001-support-for-refinedet.patch
       ${TRT_PATCHES_PATH}/0003-c++14.patch
       ${TRT_PATCHES_PATH}/0009-fix_compil_order.patch
-      ${TRT_PATCHES_PATH}/0010-fix_plugin_detect.patch
       ${TRT_PATCHES_PATH}/0011-fix_plugin_makefile_cub.patch
       )
 
@@ -1024,7 +1133,8 @@ if (USE_TENSORRT)
 endif()
 
 set(OATPP_VERSION "1.3.0")
-set(OATPP_SWAGGER_VERSION "1.3.0")
+# 1.3 + allow to change api path
+set(OATPP_SWAGGER_VERSION "ed5251c580e2e98beb50d818bcea8ddc91419d8c")
 # 1.3 + memory leak patch
 set(OATPP_ZLIB_VERSION "e7318068ae1b24b7d690f374ffbcd9c8f691336b")
 ExternalProject_Add(
@@ -1074,7 +1184,7 @@ if(USE_OATPP_SWAGGER)
         oatpp-swagger
         PREFIX oatpp-swagger
         URL https://github.com/oatpp/oatpp-swagger/archive/${OATPP_SWAGGER_VERSION}.tar.gz
-        URL_HASH SHA256=4d8db6d73095a786a521a71e8ba6b535fea62237faaaa57d98257312627d3a45
+        URL_HASH SHA256=afe026d6ba10f5cf43e65578acb80bb82f189d311ed6a0d7c4b8f4bd2b07e55f
         BUILD_IN_SOURCE true
         INSTALL_COMMAND ""
         CMAKE_ARGS
@@ -1121,6 +1231,15 @@ if (USE_HTTP_SERVER)
 endif()
 
 # main library, main & tests
+if (APPLE)
+   include_directories("/opt/homebrew/include/")
+   include_directories("/opt/homebrew/opt/libarchive/include/")
+   include_directories("/opt/homebrew/include/eigen3")
+   include_directories("/opt/homebrew/include/utf8cpp/")
+
+   link_directories("/opt/homebrew/lib/")
+endif()
+
 include_directories("${PROJECT_SOURCE_DIR}/src")
 # add the binary tree to the search path for include files
 # so that we will find dd_config.h
@@ -1145,11 +1264,14 @@ include_directories(
     ${CMAKE_SOURCE_DIR}/backends/dlib
     ${CMAKE_SOURCE_DIR}/backends/tsne
 )
+include_directories(${VARIANT_INCLUDE_DIRS})
 
 add_subdirectory(src)
 
 set(COMMON_INCLUDE_DIRS
+    ${VARIANT_INCLUDE_DIRS}
     ${Boost_INCLUDE_DIRS}
+    ${OPENMP_INCLUDE_DIRS}
     ${OATPP_INCLUDE_DIRS}
     ${HTTP_INCLUDE_DIR}
     ${PROTOBUF_INCLUDE_DIR}
@@ -1186,7 +1308,7 @@ set(COMMON_LINK_DIRS
 )
 
 set(COMMON_LINK_LIBS
-    ddetect ${DLIB_LIB_DEPS} ${TENSORRT_LIBS} ${CUDA_LIB_DEPS} glog gflags ${OpenCV_LIBS} curlpp curl ${Boost_LIBRARIES} archive
+    ddetect ${DLIB_LIB_DEPS} ${TENSORRT_LIBS} ${CUDA_LIB_DEPS} gflags ${OpenCV_LIBS} curlpp curl ${Boost_LIBRARIES} archive ${OPENMP_LIBRARIES}
     ${PROTOBUF_LIB_DEPS}
     ${HTTP_LIB_DEPS}
     ${SPDLOG_LIB_DEPS}
@@ -1201,7 +1323,9 @@ set(COMMON_LINK_LIBS
     ${TORCH_LIB_DEPS}
 )
 if (USE_HDF5)
-    list(APPEND COMMON_LINK_LIBS hdf5_cpp)
+    find_library(HDF5_LIBRARY NAMES hdf5_cpp hdf5_serial_cpp)
+    message(STATUS "HDF5 library at ${HDF5_LIBRARY}")
+    list(APPEND COMMON_LINK_LIBS ${HDF5_LIBRARY})
 endif()
 
 # configure config.cmake for external application
@@ -1238,8 +1362,8 @@ endif()
 file(GLOB_RECURSE ALL_SOURCE_FILES src/*.cpp src/*.hpp src/*.h src/*.c tests/*.cc src/*.cc)
 list(FILTER ALL_SOURCE_FILES EXCLUDE REGEX "^${CMAKE_SOURCE_DIR}/src/ext/.*$")
 
-
-find_program(CLANG_FORMAT_BIN clang-format-10 clang-format)
+# ubuntu 20: clang-format-10, ubuntu 22: clang-format 14
+find_program(CLANG_FORMAT_BIN NAMES clang-format clang-format-14 clang-format-10)
 add_custom_target(
         clang-format
         COMMAND ${CLANG_FORMAT_BIN}
@@ -1278,6 +1402,7 @@ message(STATUS "USE_COMMAND_LINE:      ${USE_COMMAND_LINE}")
 message(STATUS "USE_JSON_API:          ${USE_JSON_API}")
 message(STATUS "USE_HTTP_SERVER:       ${USE_HTTP_SERVER}")
 message(STATUS "USE_HTTP_SERVER_OATPP: ${USE_HTTP_SERVER_OATPP}")
+message(STATUS "USE_CPU_ONLY:          ${USE_CPU_ONLY}")
 message(STATUS "BUILD_SPDLOG:          ${BUILD_SPDLOG}")
 message(STATUS "BUILD_PROTOBUF:        ${BUILD_PROTOBUF}")
 message(STATUS "BUILD_TESTS:           ${BUILD_TESTS}")
@@ -1306,5 +1431,7 @@ message(STATUS "USE_XGBOOST:           ${USE_XGBOOST}")
 message(STATUS "USE_XGBOOST_CPU_ONLY:  ${USE_XGBOOST_CPU_ONLY}")
 message(STATUS "USE_TSNE:              ${USE_TSNE}")
 message(STATUS "USE_BOOST_BACKTRACE:   ${USE_BOOST_BACKTRACE}")
+message(STATUS "USE_OPENMP:            ${USE_OPENMP}")
 message(STATUS "USE_CUDA_CV:           ${USE_CUDA_CV}")
 message(STATUS "OPENCV_VERSION:        ${OPENCV_VERSION}")
+message(STATUS "CUDA_ARCH:             ${CUDA_ARCH}")

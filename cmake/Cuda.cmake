@@ -35,7 +35,7 @@ function(deepdetect_detect_installed_gpus out_variable)
       # nvcc outputs text containing line breaks when building with MSVC.
       # The line below prevents CMake from inserting a variable with line
       # breaks in the cache
-      string(REGEX MATCH "([1-9].[0-9])" __nvcc_out "${__nvcc_out}")
+      string(REGEX MATCHALL "([1-9].[0-9])" __nvcc_out "${__nvcc_out}")
       string(REPLACE "2.1" "2.1(2.0)" __nvcc_out "${__nvcc_out}")
       set(CUDA_gpu_detect_output ${__nvcc_out} CACHE INTERNAL "Returned GPU architetures from deepdetect_detect_gpus tool" FORCE)
     endif()
@@ -61,7 +61,7 @@ endmacro()
 # Function for selecting GPU arch flags for nvcc based on CUDA_ARCH_NAME
 # Usage:
 #   deepdetect_select_nvcc_arch_flags(out_variable)
-function(deepdetect_select_nvcc_arch_flags out_variable)
+function(deepdetect_select_nvcc_arch_flags out_variable out_arch)
   # List of arch names
   set(__archs_names "Fermi" "Kepler" "Maxwell" "All" "Manual")
   set(__archs_name_default "All")
@@ -136,6 +136,7 @@ function(deepdetect_select_nvcc_arch_flags out_variable)
   string(REPLACE ";" " " __nvcc_archs_readable "${__nvcc_archs_readable}")
   set(${out_variable}          ${__nvcc_flags}          PARENT_SCOPE)
   set(${out_variable}_readable ${__nvcc_archs_readable} PARENT_SCOPE)
+  set(${out_arch}              ${__cuda_arch_bin}       PARENT_SCOPE)
 endfunction()
 
 ################################################################################################
@@ -234,7 +235,7 @@ if(USE_CUDNN)
 endif()
 
 # setting nvcc arch flags
-deepdetect_select_nvcc_arch_flags(NVCC_FLAGS_EXTRA)
+deepdetect_select_nvcc_arch_flags(NVCC_FLAGS_EXTRA NVCC_ARCH_EXTRA)
 list(APPEND CUDA_NVCC_FLAGS ${NVCC_FLAGS_EXTRA})
 message(STATUS "Added CUDA NVCC flags for: ${NVCC_FLAGS_EXTRA_readable}")
 

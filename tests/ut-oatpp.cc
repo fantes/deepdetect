@@ -43,11 +43,12 @@ void test_info(std::shared_ptr<DedeApiTestClient> client)
   ASSERT_EQ(response->getStatusCode(), 200);
   auto message = response->readBodyToString();
   ASSERT_TRUE(message != nullptr);
+  std::cout << "jstr=" << *message << std::endl;
 
   rapidjson::Document d;
   d.Parse<rapidjson::kParseNanAndInfFlag>(message->c_str());
   ASSERT_FALSE(d.HasParseError());
-  ASSERT_TRUE(d.HasMember("status"));
+  ASSERT_FALSE(d.HasMember("status"));
   ASSERT_TRUE(d.HasMember("head"));
   ASSERT_TRUE(d["head"].HasMember("services"));
   ASSERT_EQ(0, d["head"]["services"].Size());
@@ -56,12 +57,14 @@ void test_info(std::shared_ptr<DedeApiTestClient> client)
 void test_services(std::shared_ptr<DedeApiTestClient> client)
 {
   std::string serv_put
-      = "{\"mllib\":\"caffe\",\"description\":\"example classification "
-        "service\",\"type\":\"supervised\",\"parameters\":{\"input\":{"
-        "\"connector\":\"csv\"},\"mllib\":{\"template\":\"mlp\",\"nclasses\":"
-        "2,"
-        "\"layers\":[50,50,50],\"activation\":\"PReLU\"}},\"model\":{"
-        "\"templates\":\"../templates/caffe/\",\"repository\":\".\"}}";
+      = "{\"mllib\":\"torch\",\"description\":\"image "
+        "classification\",\"type\":"
+        "\"supervised\",\"model\":{\"repository\":\"./examples/"
+        "oatpp_test_service\",\"create_repository\":"
+        "true},\"parameters\":{\"input\":{"
+        "\"connector\":\"image\",\"width\":224,\"height\":224,\"db\":true},"
+        "\"mllib\":{\"nclasses\":2,\"gpu\":true,\"template\":\"resnet18\"}}"
+        "}";
 
   auto response = client->put_services(serv.c_str(), serv_put.c_str());
   auto message = response->readBodyToString();
@@ -76,7 +79,7 @@ void test_services(std::shared_ptr<DedeApiTestClient> client)
   ASSERT_EQ(201, d["status"]["code"].GetInt());
 
   // service info
-  response = client->get_services(serv.c_str());
+  response = client->get_service_with_labels(serv.c_str(), "true");
   message = response->readBodyToString();
   ASSERT_TRUE(message != nullptr);
   std::cout << "jstr=" << *message << std::endl;
@@ -85,9 +88,29 @@ void test_services(std::shared_ptr<DedeApiTestClient> client)
   d.Parse<rapidjson::kParseNanAndInfFlag>(message->c_str());
   ASSERT_TRUE(d.HasMember("status"));
   ASSERT_TRUE(d.HasMember("body"));
-  ASSERT_EQ("caffe", d["body"]["mllib"]);
+  ASSERT_EQ("torch", d["body"]["mllib"]);
   ASSERT_EQ(serv_lower.c_str(), d["body"]["name"]);
   ASSERT_TRUE(d["body"].HasMember("jobs"));
+  ASSERT_TRUE(d["body"].HasMember("model_stats"));
+  ASSERT_TRUE(d["body"]["model_stats"]["params"].GetInt() == 11177538);
+  ASSERT_TRUE(d["body"].HasMember("parameters"));
+  ASSERT_TRUE(d["body"]["parameters"].HasMember("input"));
+  ASSERT_TRUE(d["body"]["parameters"].HasMember("mllib"));
+  ASSERT_TRUE(d["body"]["parameters"].HasMember("output"));
+  ASSERT_EQ(d["body"]["parameters"]["input"]["connector"].GetString(),
+            std::string("image"));
+  ASSERT_TRUE(d["body"].HasMember("labels"));
+  ASSERT_EQ(d["body"]["labels"].Size(), 0);
+
+  // test other boolean values
+  response = client->get_service_with_labels(serv.c_str(), "1");
+  ASSERT_EQ(response->getStatusCode(), 200);
+  response = client->get_service_with_labels(serv.c_str(), "false");
+  ASSERT_EQ(response->getStatusCode(), 200);
+  response = client->get_service_with_labels(serv.c_str(), "0");
+  ASSERT_EQ(response->getStatusCode(), 200);
+  response = client->get_service_with_labels(serv.c_str(), "flase");
+  ASSERT_EQ(response->getStatusCode(), 400);
 
   // info call
   response = client->get_info();
@@ -582,9 +605,15 @@ void test_predict(std::shared_ptr<DedeApiTestClient> client)
 
 OATPP_DEDE_TEST(test_info);
 
-#ifdef USE_CAFFE
+#ifdef USE_TORCH
 
 OATPP_DEDE_TEST(test_services);
+
+#endif
+
+#ifdef USE_CAFFE
+
+// TODO make these tests work on torch
 OATPP_DEDE_TEST(test_train);
 OATPP_DEDE_TEST(test_multiservices);
 OATPP_DEDE_TEST(test_concurrency);

@@ -1,7 +1,7 @@
 # syntax = docker/dockerfile:1.0-experimental
 
 ARG DD_UBUNTU_VERSION=20.04
-ARG DD_CUDA_VERSION=11.6.0
+ARG DD_CUDA_VERSION=11.8.0
 ARG DD_CUDNN_VERSION=8
 #ARG DD_TENSORRT_VERSION=7.2.2-1+cuda11.1
 
@@ -18,7 +18,7 @@ RUN echo CUDNN_VERSION=${DD_CUDNN_VERSION} >> /image-info
 #RUN echo TENSORRT_VERSION=${DD_TENSORRT_VERSION} >> /image-info
 
 RUN export DEBIAN_FRONTEND=noninteractive && \
-    apt-get update -y && apt-get install -y python-dev apt-transport-https ca-certificates gnupg software-properties-common wget curl
+    apt-get update -y && apt-get install -y python3-dev apt-transport-https ca-certificates gnupg software-properties-common wget curl
 RUN curl https://apt.kitware.com/keys/kitware-archive-latest.asc | apt-key add -
 RUN apt-add-repository 'deb https://apt.kitware.com/ubuntu/ focal main'
 
@@ -102,7 +102,7 @@ RUN for url in \
         ; do curl -L -s -o /tmp/p.deb $url && dpkg -i /tmp/p.deb && rm -rf /tmp/p.deb; done
 
 RUN python3 -m pip install --upgrade pip
-RUN python3 -m pip install torch==1.11.0 torchvision==0.12.0
+RUN python3 -m pip install torch==2.0.1 torchvision==0.15.2 onnx
 
 RUN apt clean -y
 ADD ci/gitconfig /etc/gitconfig

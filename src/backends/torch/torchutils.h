@@ -22,7 +22,7 @@
 #ifndef TORCH_UTILS_H
 #define TORCH_UTILS_H
 
-#if !defined(CPU_ONLY)
+#if !defined(CPU_ONLY) && !defined(USE_MPS)
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunused-parameter"
 #include <c10/cuda/CUDACachingAllocator.h>
@@ -37,6 +37,7 @@
 
 #include <google/protobuf/message.h>
 #include "dd_spdlog.h"
+#include <opencv2/opencv.hpp>
 
 namespace dd
 {
@@ -59,10 +60,32 @@ namespace dd
      * after the deletion of tensors, to avoid reallocating later. Sometimes it
      * means reserving all the GPU ram even if training is over.
      */
-    inline void empty_cuda_cache()
+    inline void free_gpu_memory()
     {
-#if !defined(CPU_ONLY)
+#if !defined(CPU_ONLY) && !defined(USE_MPS)
       c10::cuda::CUDACachingAllocator::emptyCache();
+#endif
+    }
+
+    inline bool is_gpu_available()
+    {
+#if defined(USE_MPS)
+      return true;
+#elif !defined(CPU_ONLY)
+      return torch::cuda::is_available();
+#else
+      return false;
+#endif
+    }
+
+    inline int get_gpu_count()
+    {
+#if defined(USE_MPS)
+      return 1;
+#elif !defined(CPU_ONLY)
+      return torch::cuda::device_count();
+#else
+      return 0;
 #endif
     }
 
@@ -132,6 +155,11 @@ namespace dd
                       const torch::Device &device,
                       std::shared_ptr<spdlog::logger> logger = nullptr,
                       bool strict = false);
+
+    /** Converts a tensor to a CV image that can be saved on the disk.
+     * XXX(louis) this function is currently debug only, and makes strong
+     * assumptions on the input tensor format. */
+    cv::Mat tensorToImage(torch::Tensor tensor);
   }
 }
 #endif

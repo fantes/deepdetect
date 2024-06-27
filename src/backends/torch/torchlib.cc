@@ -22,10 +22,6 @@
 
 #include "torchlib.h"
 
-#if !defined(CPU_ONLY)
-#include <c10/cuda/CUDACachingAllocator.h>
-#endif
-
 #include "outputconnectorstrategy.h"
 
 #include "generators/net_caffe.h"
@@ -83,6 +79,7 @@ namespace dd
     _segmentation = tl._segmentation;
     _ctc = tl._ctc;
     _multi_label = tl._multi_label;
+    _concurrent_predict = tl._concurrent_predict;
     _loss = tl._loss;
     _template_params = tl._template_params;
     _dtype = tl._dtype;
@@ -94,7 +91,7 @@ namespace dd
            TMLModel>::~TorchLib()
   {
     _module.free();
-    torch_utils::empty_cuda_cache();
+    torch_utils::free_gpu_memory();
   }
 
   template <class TInputConnectorStrategy, class TOutputConnectorStrategy,
@@ -175,6 +172,16 @@ namespace dd
       }
   }
 
+  template <class TInputConnectorStrategy, class TOutputConnectorStrategy,
+            class TMLModel>
+  void TorchLib<TInputConnectorStrategy, TOutputConnectorStrategy,
+                TMLModel>::compute_and_print_model_info()
+  {
+    _module.compute_and_print_model_info();
+    this->_model_params = _module._params_count;
+    this->_model_frozen_params = _module._frozen_params_count;
+  }
+
   /*- from mllib -*/
   template <class TInputConnectorStrategy, class TOutputConnectorStrategy,
             class TMLModel>
@@ -192,17 +199,19 @@ namespace dd
       }
     _template = mllib_dto->model_template;
 
-    if (mllib_dto->gpu && !torch::cuda::is_available())
+    if (mllib_dto->gpu && !torch_utils::is_gpu_available())
       {
         throw MLLibBadParamException(
             "GPU is not available, service could not be created");
       }
 
+    _concurrent_predict = mllib_dto->concurrent_predict;
     std::vector<int> gpuids = mllib_dto->gpuid->_ids;
 
     if (mllib_dto->nclasses != 0)
       {
         _nclasses = mllib_dto->nclasses;
+        this->_inputc._nclasses = _nclasses;
       }
     else if (mllib_dto->ntargets != 0)
       {
@@ -257,7 +266,7 @@ namespace dd
         // if gpuids = -1, we use all gpus
         if (gpuids.size() == 1 && gpuids[0] == -1)
           {
-            gpuids.resize(torch::cuda::device_count());
+            gpuids.resize(torch_utils::get_gpu_count());
             std::iota(gpuids.begin(), gpuids.end(), 0);
           }
 
@@ -265,7 +274,13 @@ namespace dd
           gpuids.push_back(0);
 
         for (int gpuid : gpuids)
-          _devices.push_back(torch::Device(DeviceType::CUDA, gpuid));
+          {
+#if USE_MPS
+            _devices.push_back(torch::Device(DeviceType::MPS, gpuid));
+#else
+            _devices.push_back(torch::Device(DeviceType::CUDA, gpuid));
+#endif
+          }
 
         if (_devices.size() > 1)
           {
@@ -402,9 +417,14 @@ namespace dd
         this->_logger->error("traced: {}, proto: {}, template: {}",
                              this->_mlmodel._traced, this->_mlmodel._proto,
                              _template);
-        throw MLLibInternalException(
-            "Only one of these must be provided: traced net, protofile or "
-            "native template");
+        if (_finetuning && NativeFactory::valid_template_def(_template))
+          throw MLLibInternalException(
+              "If you want to finetune a model using a native template, move "
+              "the weights to a .npt file");
+        else
+          throw MLLibInternalException(
+              "Only one of these must be provided: traced net, protofile or "
+              "native template");
       }
 
     // FIXME(louis): out of if(bert) because we allow not to specify template
@@ -489,6 +509,12 @@ namespace dd
     _module.load(this->_mlmodel);
     _module.freeze_traced(freeze_traced);
 
+    // print
+    if (_module.is_ready(_template))
+      {
+        compute_and_print_model_info();
+      }
+
     _best_metrics = { "map", "meaniou",  "mlacc", "delta_score_0.1", "bacc",
                       "f1",  "net_meas", "acc",   "L1_mean_error",   "eucll" };
     _best_metric_values.resize(1, std::numeric_limits<double>::infinity());
@@ -537,7 +563,7 @@ namespace dd
           {
             if (meas_out.has(m))
               {
-                cur_meas = meas_out.get(m).get<double>();
+                cur_meas = meas_out.get(m).template get<double>();
                 meas = m;
                 break;
               }
@@ -652,8 +678,11 @@ namespace dd
     try
       {
         inputc.transform(ad);
+        bool module_was_ready = _module.is_ready(_template);
         _module.post_transform_train<TInputConnectorStrategy>(
             _template, _template_params, inputc, this->_mlmodel, _main_device);
+        if (!module_was_ready)
+          compute_and_print_model_info();
       }
     catch (...)
       {
@@ -676,13 +705,21 @@ namespace dd
             this->_logger->info("mirror: {}", has_mirror);
             bool has_rotate
                 = ad_mllib.has("rotate") && ad_mllib.get("rotate").get<bool>();
+
+            // disable rotate for non square image size
+            if (inputc.width() != inputc.height() && has_rotate)
+              {
+                has_rotate = 0;
+                this->_logger->warn(
+                    "rotate augment was not applied. To enable rotate, select "
+                    "img_width and img_height to be equal.");
+              }
             this->_logger->info("rotate: {}", has_rotate);
             CropParams crop_params;
             if (ad_mllib.has("crop_size"))
               {
                 int crop_size = ad_mllib.get("crop_size").get<int>();
-                crop_params
-                    = CropParams(crop_size, inputc.width(), inputc.height());
+                crop_params = CropParams(crop_size);
                 if (ad_mllib.has("test_crop_samples"))
                   crop_params._test_crop_samples
                       = ad_mllib.get("test_crop_samples").get<int>();
@@ -692,8 +729,7 @@ namespace dd
             if (ad_mllib.has("cutout"))
               {
                 float cutout = ad_mllib.get("cutout").get<double>();
-                cutout_params
-                    = CutoutParams(cutout, inputc.width(), inputc.height());
+                cutout_params = CutoutParams(cutout);
                 this->_logger->info("cutout: {}", cutout);
               }
             GeometryParams geometry_params;
@@ -734,7 +770,7 @@ namespace dd
                       ad_geometry.get("pad_mode").get<std::string>());
               }
             auto *img_ic = reinterpret_cast<ImgTorchInputFileConn *>(&inputc);
-            NoiseParams noise_params;
+            NoiseParams noise_params(img_ic->_bw);
             noise_params._rgb = img_ic->_rgb;
             APIData ad_noise = ad_mllib.getobj("noise");
             if (!ad_noise.empty())
@@ -742,7 +778,7 @@ namespace dd
                 noise_params._prob = ad_noise.get("prob").get<double>();
                 this->_logger->info("noise: {}", noise_params._prob);
               }
-            DistortParams distort_params;
+            DistortParams distort_params(img_ic->_bw);
             distort_params._rgb = img_ic->_rgb;
             APIData ad_distort = ad_mllib.getobj("distort");
             if (!ad_distort.empty())
@@ -1271,11 +1307,8 @@ namespace dd
                       }
                   }
 
-                if (elapsed_it == iterations)
-                  {
-                    out.add("measure", meas_out.getobj("measure"));
-                    out.add("measures", meas_out.getv("measures"));
-                  }
+                out.add("measure", meas_out.getobj("measure"));
+                out.add("measures", meas_out.getv("measures"));
               }
 
             train_loss = 0;
@@ -1331,13 +1364,13 @@ namespace dd
           }
         if (!snapshotted)
           snapshot(elapsed_it, tsolver);
-        torch_utils::empty_cuda_cache();
+        torch_utils::free_gpu_memory();
         return -1;
       }
 
     if (skip_training)
       test(ad, inputc, inputc._test_datasets, test_batch_size, out);
-    torch_utils::empty_cuda_cache();
+    torch_utils::free_gpu_memory();
 
     // Update model after training
     this->_mlmodel.read_from_repository(this->_logger);
@@ -1351,9 +1384,17 @@ namespace dd
 
   template <class TInputConnectorStrategy, class TOutputConnectorStrategy,
             class TMLModel>
-  int TorchLib<TInputConnectorStrategy, TOutputConnectorStrategy,
-               TMLModel>::predict(const APIData &ad_in, APIData &out)
+  oatpp::Object<DTO::PredictBody>
+  TorchLib<TInputConnectorStrategy, TOutputConnectorStrategy,
+           TMLModel>::predict(const APIData &ad_in)
   {
+    std::unique_ptr<std::lock_guard<std::mutex>> lock;
+    if (!_concurrent_predict)
+      {
+        // concurrent calls can use more memory on gpu than initially expected
+        lock = std::make_unique<std::lock_guard<std::mutex>>(_net_mutex);
+        this->_logger->info("Locking torch service for predict");
+      }
     oatpp::Object<DTO::ServicePredict> predict_dto;
 
     // XXX: until everything is DTO, we consider the two cases:
@@ -1451,9 +1492,12 @@ namespace dd
             // XXX: torchinputconn does not fully support DTOs yet
             inputc.transform(ad_in);
           }
+        bool module_was_ready = _module.is_ready(_template);
         _module.post_transform_predict(_template, _template_params, inputc,
                                        this->_mlmodel, _main_device,
                                        predict_dto);
+        if (!module_was_ready)
+          compute_and_print_model_info();
       }
     catch (...)
       {
@@ -1482,9 +1526,10 @@ namespace dd
         test(ad_in, inputc, inputc._dataset, 1, meas_out);
         meas_out.erase("iteration");
         meas_out.erase("train_loss");
-        out.add("measure", meas_out.getobj("measure"));
-        torch_utils::empty_cuda_cache();
-        return 0;
+        auto out_dto = DTO::PredictBody::createShared();
+        out_dto->measure = meas_out;
+        torch_utils::free_gpu_memory();
+        return out_dto;
       }
 
     inputc._dataset.reset(false);
@@ -1600,6 +1645,10 @@ namespace dd
             if (bbox)
               {
                 // Supporting only torchvision output format at the moment.
+                if (!out_ivalue.isList())
+                  throw MLLibBadParamException(
+                      "Could not read output of detection model. Check that "
+                      "mllib.template is set correctly.");
                 auto out_dicts = out_ivalue.toList();
 
                 for (size_t i = 0; i < out_dicts.size(); ++i)
@@ -1620,12 +1669,20 @@ namespace dd
                         throw MLLibInternalException(
                             "Couldn't find original image size for " + uri);
                       }
+                    int src_width
+                        = inputc.width() > 0 ? inputc.width() : cols - 1;
+                    int src_height
+                        = inputc.height() > 0 ? inputc.height() : rows - 1;
 
                     APIData results_ad;
                     std::vector<double> probs;
                     std::vector<std::string> cats;
                     std::vector<APIData> bboxes;
 
+                    if (!out_dicts.get(i).isGenericDict())
+                      throw MLLibBadParamException(
+                          "Could not read output of detection model. Check "
+                          "that mllib.template is set correctly.");
                     auto out_dict = out_dicts.get(i).toGenericDict();
                     Tensor bboxes_tensor
                         = torch_utils::to_tensor_safe(out_dict.at("boxes"))
@@ -1656,10 +1713,10 @@ namespace dd
                             this->_mlmodel.get_hcorresp(labels_acc[j]));
 
                         double bbox[] = {
-                          bboxes_acc[j][0] / inputc.width() * (cols - 1),
-                          bboxes_acc[j][1] / inputc.height() * (rows - 1),
-                          bboxes_acc[j][2] / inputc.width() * (cols - 1),
-                          bboxes_acc[j][3] / inputc.height() * (rows - 1),
+                          bboxes_acc[j][0] / src_width * (cols - 1),
+                          bboxes_acc[j][1] / src_height * (rows - 1),
+                          bboxes_acc[j][2] / src_width * (cols - 1),
+                          bboxes_acc[j][3] / src_height * (rows - 1),
                         };
 
                         // clamp bbox
@@ -1831,7 +1888,7 @@ namespace dd
                 if (imgsize
                     != (*bit).second.first
                            * (*bit).second.second) // resizing output
-                  // segmentation array
+                                                   // segmentation array
                   {
                     vals = ImgInputFileConn::img_resize_vector(
                         vals, inputc.height(), inputc.width(),
@@ -1910,25 +1967,27 @@ namespace dd
           }
       }
 
+    oatpp::Object<DTO::PredictBody> out_dto;
+    OutputConnectorConfig conf;
     if (extract_layer.empty() && !_segmentation)
       {
         outputc.add_results(results_ads);
 
         if (_timeserie)
-          out.add("timeseries", true);
+          conf._timeseries = true;
         if (_regression)
-          out.add("regression", true);
-        out.add("bbox", bbox);
-        out.add("nclasses", static_cast<int>(_nclasses));
-        outputc.finalize(output_params, out,
-                         static_cast<MLModel *>(&this->_mlmodel));
+          conf._regression = true;
+        conf._has_bbox = bbox;
+        conf._nclasses = static_cast<int>(_nclasses);
+        out_dto = outputc.finalize(output_params, conf,
+                                   static_cast<MLModel *>(&this->_mlmodel));
       }
     else
       {
         UnsupervisedOutput unsupo;
         unsupo.add_results(results_ads);
-        unsupo.finalize(output_params, out,
-                        static_cast<MLModel *>(&this->_mlmodel));
+        out_dto = unsupo.finalize(output_params, conf,
+                                  static_cast<MLModel *>(&this->_mlmodel));
       }
 
     if (predict_dto->_chain)
@@ -1939,18 +1998,16 @@ namespace dd
             // can't do reinterpret_cast because virtual inheritance
             InputConnectorStrategy *inputc_base = &inputc;
             auto *img_ic = dynamic_cast<ImgTorchInputFileConn *>(inputc_base);
-            APIData chain_input;
             if (!img_ic->_orig_images.empty())
-              chain_input.add("imgs", img_ic->_orig_images);
+              out_dto->_chain_input._imgs = img_ic->_orig_images;
             else
-              chain_input.add("imgs", img_ic->_images);
-            chain_input.add("imgs_size", img_ic->_images_size);
-            out.add("input", chain_input);
+              out_dto->_chain_input._imgs = img_ic->_images;
+            out_dto->_chain_input._img_sizes = img_ic->_images_size;
           }
       }
 
-    out.add("status", 0);
-    return 0;
+    // out_dto->status = 0;
+    return out_dto;
   }
 
   template <class TInputConnectorStrategy, class TOutputConnectorStrategy,
@@ -1995,6 +2052,17 @@ namespace dd
         if ((it = std::find(meas.begin(), meas.end(), "cmdiag")) != meas.end())
           meas.erase(it);
         ad_out.add("measure", meas);
+      }
+
+    std::vector<int> iou_thresholds;
+    std::map<int, APIData> ad_bbox_per_iou;
+    if (_bbox)
+      {
+        auto meas = ad_out.get("measure").get<std::vector<std::string>>();
+        SupervisedOutput::find_ap_iou_thresholds(meas, iou_thresholds);
+
+        for (int i : iou_thresholds)
+          ad_bbox_per_iou[i] = APIData();
       }
 
     auto dataloader = torch::data::make_data_loader(
@@ -2100,11 +2168,19 @@ namespace dd
                     ++stop;
                   }
 
-                auto vbad = get_bbox_stats(
-                    targ_bboxes.index({ torch::indexing::Slice(start, stop) }),
-                    targ_labels.index({ torch::indexing::Slice(start, stop) }),
-                    bboxes_tensor, labels_tensor, score_tensor);
-                ad_bbox.add(std::to_string(entry_id), vbad);
+                for (int iou_thres : iou_thresholds)
+                  {
+                    double iou_thres_d = static_cast<double>(iou_thres) / 100;
+                    std::vector<APIData> vbad = get_bbox_stats(
+                        targ_bboxes.index(
+                            { torch::indexing::Slice(start, stop) }),
+                        targ_labels.index(
+                            { torch::indexing::Slice(start, stop) }),
+                        bboxes_tensor, labels_tensor, score_tensor,
+                        iou_thres_d);
+                    ad_bbox_per_iou[iou_thres].add(std::to_string(entry_id),
+                                                   vbad);
+                  }
                 ++entry_id;
               }
           }
@@ -2279,6 +2355,12 @@ namespace dd
       {
         ad_res.add("bbox", true);
         ad_res.add("pos_count", entry_id);
+
+        for (int iou_thres : iou_thresholds)
+          {
+            ad_bbox.add("map-" + std::to_string(iou_thres),
+                        ad_bbox_per_iou[iou_thres]);
+          }
         ad_res.add("0", ad_bbox);
       }
     else if (_segmentation)
@@ -2298,7 +2380,8 @@ namespace dd
                                      const at::Tensor &targ_labels,
                                      const at::Tensor &bboxes_tensor,
                                      const at::Tensor &labels_tensor,
-                                     const at::Tensor &score_tensor)
+                                     const at::Tensor &score_tensor,
+                                     float overlap_threshold)
   {
     auto targ_bboxes_acc = targ_bboxes.accessor<float, 2>();
     auto targ_labels_acc = targ_labels.accessor<int64_t, 1>();
@@ -2328,7 +2411,6 @@ namespace dd
     };
 
     std::vector<eval_info> eval_infos(_nclasses);
-    float overlap_threshold = 0.5; // TODO: parameter
 
     for (int j = 0; j < pred_bbox_count; ++j)
       {

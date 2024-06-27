@@ -97,6 +97,9 @@ class DedeApiTestClient : public oatpp::web::client::ApiClient
   API_CALL("GET", "/info", get_info)
   API_CALL("GET", "/services/{service-name}", get_services,
            PATH(oatpp::String, service_name, "service-name"))
+  API_CALL("GET", "/services/{service-name}", get_service_with_labels,
+           PATH(oatpp::String, service_name, "service-name"),
+           QUERY(String, labels))
   API_CALL("POST", "/services/{service-name}", post_services,
            PATH(oatpp::String, service_name, "service-name"),
            BODY_STRING(oatpp::String, service_data))
@@ -140,8 +143,9 @@ public:
     dd::OatppJsonAPI oja;
     TestComponent component;
     oatpp::test::web::ClientServerTestRunner runner;
+    // using dd mapper is required to be able to serialize the dd types
     std::shared_ptr<oatpp::data::mapping::ObjectMapper> defaultObjectMapper
-        = oatpp::parser::json::mapping::ObjectMapper::createShared();
+        = dd::oatpp_utils::createDDMapper();
     runner.addController(
         std::make_shared<DedeController>(&oja, defaultObjectMapper));
     runner.run(

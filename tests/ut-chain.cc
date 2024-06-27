@@ -49,9 +49,11 @@ static std::string caffe_ocr_repo = "../examples/caffe/multiword_ocr";
 static std::string caffe_faces_detect_repo = "../examples/caffe/faces_512";
 static std::string caffe_age_repo = "../examples/caffe/age_real";
 
-static std::string trt_detect_repo = "../examples/trt/faces_512/";
+static std::string trt_detect_repo = "../examples/trt/yolox_onnx_trt_nowrap/";
 static std::string trt_gan_repo
     = "../examples/trt/cyclegan_resnet_attn_onnx_trt";
+static std::string trt_consistency_repo
+    = "../examples/trt/noglasses2glasses_cm_128";
 
 static std::string test_img_folder = "../examples/all/images";
 
@@ -127,6 +129,30 @@ TEST(chain, chain_torch_detection_classification)
                 .GetString(),
             std::string("n02086079 Pekinese, Pekingese, Peke"));
 
+  // chain predict without detection
+  jchainstr
+      = "{\"chain\":{\"name\":\"chain\",\"calls\":["
+        "{\"service\":\""
+        + detect_sname
+        + "\",\"parameters\":{\"input\":{\"keep_orig\":true},\"output\":{"
+          "\"bbox\":true,\"confidence_threshold\":0.9999}},\"data\":[\""
+        + uri1
+        + "\"]},"
+          "{\"id\":\"crop\",\"action\":{\"type\":\"crop\",\"parameters\":{"
+          "\"padding_ratio\":0.05}}},{\"service\":\""
+        + classif_sname
+        + "\",\"parent_id\":\"crop\",\"parameters\":{\"output\":{\"best\":1}}}"
+          "]}}";
+  joutstr = japi.jrender(japi.service_chain("chain", jchainstr));
+  jd = JDoc();
+  std::cout << "joutstr=" << joutstr << std::endl;
+  jd.Parse<rapidjson::kParseNanAndInfFlag>(joutstr.c_str());
+  ASSERT_TRUE(!jd.HasParseError());
+  ASSERT_EQ(200, jd["status"]["code"]);
+  ASSERT_TRUE(jd["body"]["predictions"].IsArray());
+  ASSERT_EQ(jd["body"]["predictions"].Size(), 1);
+  ASSERT_EQ(jd["body"]["predictions"][0]["classes"].Size(), 0);
+
   // multiple models (tree)
   std::string classif2_sname = "classif2";
   jstr = "{\"mllib\":\"torch\",\"description\":\"squeezenet\",\"type\":"
@@ -181,7 +207,6 @@ TEST(chain, chain_torch_detection_classification)
   // cleanup
   fileops::remove_file(torch_detect_repo, "model.json");
 }
-
 #endif
 
 #ifdef USE_CAFFE
@@ -372,18 +397,18 @@ TEST(chain, chain_trt_detection_gan)
   JsonAPI japi;
   std::string detect_sname = "detect";
   std::string jstr
-      = "{\"mllib\":\"tensorrt\",\"description\":\"imagenet\","
+      = "{\"mllib\":\"tensorrt\",\"description\":\"yolox\","
         "\"type\":\"supervised\",\"model\":{\"repository\":\""
         + trt_detect_repo
         + "\"},\"parameters\":{\"input\":{\"connector\":"
-          "\"image\",\"height\":512,\"width\":512},\"mllib\":{\"datatype\":"
-          "\"fp32\",\"maxBatchSize\":1,\"maxWorkspaceSize\":256,\"gpuid\":0}}"
-          "}";
+          "\"image\",\"height\":640,\"width\":640},\"mllib\":{"
+          "\"maxWorkspaceSize\":256,\"gpuid\":0,"
+          "\"template\":\"yolox\",\"nclasses\":81,\"datatype\":\"fp16\"}}}";
   std::string joutstr = japi.jrender(japi.service_create(detect_sname, jstr));
   ASSERT_EQ(created_str, joutstr);
 
   std::string gan_sname = "gan";
-  jstr = "{\"mllib\":\"tensorrt\",\"description\":\"squeezenet\",\"type\":"
+  jstr = "{\"mllib\":\"tensorrt\",\"description\":\"gan\",\"type\":"
          "\"supervised\",\"model\":{\"repository\":\""
          + trt_gan_repo
          + "\"},\"parameters\":{\"input\":{\"connector\":\"image\",\"height\":"
@@ -401,9 +426,9 @@ TEST(chain, chain_trt_detection_gan)
         + "\",\"parameters\":{\"input\":{\"keep_orig\":true},\"output\":{"
           "\"bbox\":true,\"best_bbox\":1}},\"data\":[\""
         + trt_gan_repo
-        + "/horse.jpg\"]},"
+        + "/horse_1024.jpg\"]},"
           "{\"id\":\"crop\",\"action\":{\"type\":\"crop\",\"parameters\":{"
-          "\"fixed_size\":360}}},{\"service\":\""
+          "\"fixed_width\":360,\"fixed_height\":360}}},{\"service\":\""
         + gan_sname
         + "\",\"parent_id\":\"crop\",\"parameters\":{\"mllib\":{\"extract_"
           "layer\":\"last\"},\"output\":{}}}"
@@ -431,6 +456,50 @@ TEST(chain, chain_trt_detection_gan)
   ASSERT_TRUE(gan_pred["vals"].IsArray());
   ASSERT_EQ(gan_pred["vals"].Size(), 360 * 360 * 3);
 
+  // image recompose
+  // XXX: keep_orig = false doesn't work on CUDA images!
+  jchainstr
+      = "{\"chain\":{\"name\":\"chain\",\"calls\":[{\"service\":\""
+        + detect_sname
+        + "\",\"parameters\":{\"input\":{\"keep_orig\":true,"
+#ifdef USE_CUDA_CV
+          "\"cuda\":true"
+#else
+          "\"cuda\":false"
+#endif
+          "},\"output\":{\"bbox\":true,\"best_bbox\":2}},\"data\":[\""
+        + trt_gan_repo
+        + "/horse_1024.jpg\"]},"
+          "{\"id\":\"crop\",\"action\":{\"type\":\"crop\",\"parameters\":{"
+          "\"fixed_width\":360,\"fixed_height\":360}}},{\"service\":\""
+        + gan_sname
+        + "\",\"parent_id\":\"crop\",\"parameters\":{\"input\":{"
+#ifdef USE_CUDA_CV
+          "\"cuda\":true"
+#else
+          "\"cuda\":false"
+#endif
+          "},\"mllib\":{\"extract_layer\":\"last\"},\"output\":{\"image\":"
+          "true}}},{\"id\":\"recompose\",\"action\":{\"type\":\"recompose\","
+          "\"parameters\":{\"save_img\":true,\"save_path\":\".\"}}}]}}";
+  joutstr = japi.jrender(japi.service_chain("chain", jchainstr));
+  std::cout << "joutstr=" << joutstr.substr(0, 500)
+            << (joutstr.size() > 500
+                    ? " ... " + joutstr.substr(joutstr.size() - 500)
+                    : "")
+            << std::endl;
+  jd = JDoc();
+  jd.Parse<rapidjson::kParseNanAndInfFlag>(joutstr.c_str());
+  ASSERT_TRUE(!jd.HasParseError());
+  ASSERT_EQ(200, jd["status"]["code"]);
+  ASSERT_TRUE(jd["body"]["predictions"].IsArray());
+  ASSERT_TRUE(jd["body"]["predictions"][0]["classes"].IsArray());
+  ASSERT_EQ(2, jd["body"]["predictions"][0]["classes"].Size());
+  ASSERT_TRUE(jd["body"]["predictions"][0]["recompose"].IsObject());
+
+  auto &recompose_pred = jd["body"]["predictions"][0]["recompose"];
+  ASSERT_TRUE(recompose_pred["images"].IsArray());
+
   jstr = "{\"clear\":\"lib\"}";
   joutstr = japi.jrender(japi.service_delete(detect_sname, jstr));
   ASSERT_EQ(ok_str, joutstr);
@@ -442,4 +511,160 @@ TEST(chain, chain_trt_detection_gan)
                                     + get_trt_archi() + "_bs1"));
 }
 
-#endif
+// With masks
+TEST(chain, chain_trt_consistency)
+{
+  // create service
+  JsonAPI japi;
+  std::string detect_sname = "detect";
+  std::string jstr
+      = "{\"mllib\":\"tensorrt\",\"description\":\"yolox\","
+        "\"type\":\"supervised\",\"model\":{\"repository\":\""
+        + trt_detect_repo
+        + "\"},\"parameters\":{\"input\":{\"connector\":"
+          "\"image\",\"height\":640,\"width\":640},\"mllib\":{"
+          "\"maxWorkspaceSize\":256,\"gpuid\":0,"
+          "\"template\":\"yolox\",\"nclasses\":81,\"datatype\":\"fp16\"}}}";
+  std::string joutstr = japi.jrender(japi.service_create(detect_sname, jstr));
+  ASSERT_EQ(created_str, joutstr);
+
+  std::string cm_sname = "consistency";
+  jstr = "{\"mllib\":\"tensorrt\",\"description\":\"consistency\",\"type\":"
+         "\"supervised\",\"model\":{\"repository\":\""
+         + trt_consistency_repo
+         + "\"},\"parameters\":{\"input\":{\"connector\":\"image\",\"height\":"
+           "128,\"width\":128,\"rgb\":true,\"scale\":0.0039,\"mean\":[0.5, "
+           "0.5,0.5],\"std\":[0.5,0.5,0.5]},\"mllib\":{\"maxBatchSize\":1,"
+           "\"maxWorkspaceSize\":128,\"gpuid\":0,\"datatype\":\"fp16\","
+           "\"template\":\"consistency\"}}}";
+  joutstr = japi.jrender(japi.service_create(cm_sname, jstr));
+  ASSERT_EQ(created_str, joutstr);
+
+  // chain predict
+  std::string jchainstr
+      = "{\"chain\":{\"name\":\"chain\",\"calls\":["
+        "{\"service\":\""
+        + detect_sname
+        + "\",\"parameters\":{\"input\":{\"keep_orig\":true},\"output\":{"
+          "\"bbox\":true,\"best_bbox\":1}},\"data\":[\""
+        + trt_consistency_repo
+        + "/glasses.png\"]},"
+          "{\"id\":\"crop\",\"action\":{\"type\":\"crop\",\"parameters\":{"
+          "\"fixed_width\":256,\"fixed_height\":256,\"generate_mask\":true}}}"
+          ",{\"service\":\""
+        + cm_sname
+        + "\",\"parent_id\":\"crop\",\"parameters\":{\"mllib\":{\"extract_"
+          "layer\":\"last\"},\"output\":{}}}"
+          "]}}";
+  joutstr = japi.jrender(japi.service_chain("chain", jchainstr));
+  // very long outstr is truncated
+  std::cout << "joutstr=" << joutstr.substr(0, 500)
+            << (joutstr.size() > 500
+                    ? " ... " + joutstr.substr(joutstr.size() - 500)
+                    : "")
+            << std::endl;
+  JDoc jd;
+  jd.Parse<rapidjson::kParseNanAndInfFlag>(joutstr.c_str());
+  ASSERT_TRUE(!jd.HasParseError());
+  ASSERT_EQ(200, jd["status"]["code"]);
+  ASSERT_TRUE(jd["body"]["predictions"].IsArray());
+  ASSERT_EQ(jd["body"]["predictions"].Size(), 1);
+  ASSERT_TRUE(jd["body"]["predictions"][0]["classes"].IsArray());
+  ASSERT_EQ(jd["body"]["predictions"][0]["classes"].Size(), 1);
+  ASSERT_TRUE(
+      jd["body"]["predictions"][0]["classes"][0][cm_sname.c_str()].IsObject());
+
+  auto &cm_pred = jd["body"]["predictions"][0]["classes"][0][cm_sname.c_str()];
+  ASSERT_TRUE(cm_pred["vals"].IsArray());
+  ASSERT_EQ(cm_pred["vals"].Size(), 128 * 128 * 3);
+
+  jstr = "{\"clear\":\"lib\"}";
+  joutstr = japi.jrender(japi.service_delete(detect_sname, jstr));
+  ASSERT_EQ(ok_str, joutstr);
+  joutstr = japi.jrender(japi.service_delete(cm_sname, jstr));
+  ASSERT_EQ(ok_str, joutstr);
+  ASSERT_TRUE(!fileops::file_exists(trt_detect_repo + "/TRTengine_arch"
+                                    + get_trt_archi() + "_bs1"));
+  ASSERT_TRUE(!fileops::file_exists(trt_consistency_repo + "/TRTengine_arch"
+                                    + get_trt_archi() + "_bs1"));
+}
+
+// Test internal call without json
+TEST(chain, chain_trt_dto)
+{
+  JsonAPI japi;
+  std::string detect_sname = "detect";
+  std::string jstr
+      = "{\"mllib\":\"tensorrt\",\"description\":\"yolox\","
+        "\"type\":\"supervised\",\"model\":{\"repository\":\""
+        + trt_detect_repo
+        + "\"},\"parameters\":{\"input\":{\"connector\":"
+          "\"image\",\"height\":640,\"width\":640},\"mllib\":{"
+          "\"maxWorkspaceSize\":256,\"gpuid\":0,"
+          "\"template\":\"yolox\",\"nclasses\":81,\"datatype\":\"fp16\"}}}";
+  std::string joutstr = japi.jrender(japi.service_create(detect_sname, jstr));
+  ASSERT_EQ(created_str, joutstr);
+
+  std::string gan_sname = "gan";
+  jstr = "{\"mllib\":\"tensorrt\",\"description\":\"gan\",\"type\":"
+         "\"supervised\",\"model\":{\"repository\":\""
+         + trt_gan_repo
+         + "\"},\"parameters\":{\"input\":{\"connector\":\"image\",\"height\":"
+           "360,\"width\":360,\"rgb\":true,\"scale\":0.0039,\"mean\":[0.5, "
+           "0.5,0.5],\"std\":[0.5,0.5,0.5]},\"mllib\":{\"maxBatchSize\":1,"
+           "\"maxWorkspaceSize\":256,\"gpuid\":0,\"datatype\":\"fp16\"}}}";
+  joutstr = japi.jrender(japi.service_create(gan_sname, jstr));
+  ASSERT_EQ(created_str, joutstr);
+
+  // chain call with no predictions
+  std::string uri1 = trt_gan_repo + "/horse_1024.jpg";
+  auto input_dto = oatpp::Object<DTO::ServiceChain>::createShared();
+  input_dto->chain = oatpp::Object<DTO::Chain>::createShared();
+
+  auto call1 = oatpp::Object<DTO::ChainCall>::createShared();
+  call1->service = detect_sname;
+  call1->parameters->input->keep_orig = true;
+  call1->parameters->output->bbox = true;
+  call1->parameters->output->confidence_threshold = 0.9999;
+  call1->data->push_back(uri1);
+  input_dto->chain->calls->push_back(call1);
+
+  auto call2 = oatpp::Object<DTO::ChainCall>::createShared();
+  call2->id = "crop";
+  call2->action = oatpp::Object<DTO::ChainAction>::createShared();
+  call2->action->type = "crop";
+  call2->action->parameters->padding_ratio = 0.05;
+  input_dto->chain->calls->push_back(call2);
+
+  auto call3 = oatpp::Object<DTO::ChainCall>::createShared();
+  call3->service = gan_sname;
+  call3->parent_id = "crop";
+  call3->parameters->mllib->extract_layer = "last";
+  call3->parameters->output->image = true;
+  input_dto->chain->calls->push_back(call3);
+
+  auto chain_out = japi.chain(input_dto, "chain");
+  JDoc jdoc;
+  oatpp_utils::dtoToJDoc(chain_out, jdoc);
+  std::cout << dd_utils::jrender(jdoc) << std::endl;
+
+  ASSERT_EQ(chain_out->predictions->size(), 1);
+  // PredictClass -> only one model, so the Predict DTO is returned without
+  // modifications
+  ASSERT_EQ((*chain_out->predictions->at(0))["classes"]
+                .retrieve<oatpp::Vector<oatpp::Object<DTO::PredictClass>>>()
+                ->size(),
+            0);
+
+  jstr = "{\"clear\":\"lib\"}";
+  joutstr = japi.jrender(japi.service_delete(detect_sname, jstr));
+  ASSERT_EQ(ok_str, joutstr);
+  joutstr = japi.jrender(japi.service_delete(gan_sname, jstr));
+  ASSERT_EQ(ok_str, joutstr);
+  ASSERT_TRUE(!fileops::file_exists(trt_detect_repo + "/TRTengine_arch"
+                                    + get_trt_archi() + "_bs1"));
+  ASSERT_TRUE(!fileops::file_exists(trt_gan_repo + "/TRTengine_arch"
+                                    + get_trt_archi() + "_bs1"));
+}
+
+#endif // USE_TENSORRT

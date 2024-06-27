@@ -26,9 +26,6 @@
 #define SPDLOG_ENABLE_SYSLOG
 #endif
 
-#include "mllibstrategy.h"
-#include "mlmodel.h"
-#include "outputconnectorstrategy.h"
 #include <string>
 #include <future>
 #include <mutex>
@@ -39,6 +36,11 @@
 #include <unordered_map>
 #include <chrono>
 #include <iostream>
+
+#include "mllibstrategy.h"
+#include "mlmodel.h"
+#include "outputconnectorstrategy.h"
+#include "dto/info.hpp"
 
 namespace dd
 {
@@ -185,30 +187,63 @@ namespace dd
             }
           ++hit;
         }
+
+      // wait for predict to finish
+      boost::unique_lock<boost::shared_mutex> lock2(_train_or_predict_mutex);
     }
 
     /**
      * \brief get info about the service
      * @return info data object
      */
-    APIData info(const bool &status = false) const
+    oatpp::Object<DTO::Service> info(const bool &status,
+                                     const bool &labels = false) const
     {
-      APIData ad;
-      if (!status)
-        {
-          ad.add("name", _sname);
-          ad.add("description", _description);
-          ad.add("mllib", this->_libname);
-          if (this->_has_predict)
-            ad.add("predict", true);
-          else
-            ad.add("training", true);
-          ad.add("mltype", this->_mltype);
-        }
+      // general info
+      auto serv_dto = DTO::Service::createShared();
+      serv_dto->name = _sname;
+      serv_dto->description = _description;
+      serv_dto->mllib = this->_libname;
+      if (this->_has_predict)
+        serv_dto->predict = true;
       else
+        serv_dto->training = true;
+      serv_dto->mltype = this->_mltype;
+      if (typeid(this->_outputc) == typeid(UnsupervisedOutput))
+        serv_dto->type = "unsupervised";
+      else
+        serv_dto->type = "supervised";
+      serv_dto->repository = this->_inputc._model_repo;
+      serv_dto->parameters
+          = _init_parameters.createSharedDTO<DTO::Parameters>();
+
+      if (this->_has_predict)
         {
-          ad = info(false);
-          std::vector<APIData> vad;
+          serv_dto->width = this->_inputc.width();
+          serv_dto->height = this->_inputc.height();
+        }
+
+      // model info
+      serv_dto->model_stats = DTO::ServiceModel::createShared();
+      if (this->_model_flops != 0)
+        serv_dto->model_stats->params = this->_model_flops;
+      if (this->_model_params != 0)
+        serv_dto->model_stats->params = this->_model_params;
+      if (this->_model_frozen_params != 0)
+        serv_dto->model_stats->frozen_params = this->_model_frozen_params;
+      if (this->_mem_used_train != 0)
+        serv_dto->model_stats->data_mem_train
+            = static_cast<int64_t>(this->_mem_used_train * sizeof(float));
+      if (this->_mem_used_test != 0)
+        serv_dto->model_stats->data_mem_test
+            = static_cast<int64_t>(this->_mem_used_test * sizeof(float));
+      // for legacy
+      serv_dto->stats = serv_dto->model_stats;
+
+      // job status
+      if (status)
+        {
+          serv_dto->jobs = oatpp::Vector<DTO::DTOApiData>::createShared();
           std::lock_guard<std::mutex> lock(_tjobs_mutex);
           auto hit = _training_jobs.begin();
           while (hit != _training_jobs.end())
@@ -221,7 +256,6 @@ namespace dd
               else if (jstatus == 1)
                 {
                   jad.add("status", std::string("running"));
-                  APIData tjob;
                   std::future_status status
                       = (*hit).second._ft.wait_for(std::chrono::seconds(0));
                   if (status == std::future_status::timeout)
@@ -237,66 +271,31 @@ namespace dd
                 }
               else if (jstatus == 2)
                 jad.add("status", std::string("finished"));
-              vad.push_back(jad);
+              serv_dto->jobs->push_back(jad);
               ++hit;
             }
-          ad.add("jobs", vad);
-          if (this->_has_predict)
-            {
-              ad.add("repository", this->_inputc._model_repo);
-              ad.add("width", this->_inputc.width());
-              ad.add("height", this->_inputc.height());
-            }
         }
-      this->_stats.to(ad);
-      return ad;
-    }
 
-    /**
-     * \brief get status of the service
-     *        To be surcharged in related classes
-     * @return status data object
-     */
-    APIData status()
-    {
-      APIData ad = info(false);
-      std::vector<APIData> vad;
-      std::lock_guard<std::mutex> lock(_tjobs_mutex);
-      auto hit = _training_jobs.begin();
-      while (hit != _training_jobs.end())
+      // labels
+      if (labels)
         {
-          APIData jad;
-          jad.add("job", (*hit).first);
-          int jstatus = (*hit).second._status;
-          if (jstatus == 0)
-            jad.add("status", std::string("not started"));
-          else if (jstatus == 1)
-            jad.add("status", std::string("running"));
-          else if (jstatus == 2)
-            jad.add("status", std::string("finished"));
-          vad.push_back(jad);
-          ++hit;
+          auto labels_vec = oatpp::Vector<oatpp::String>::createShared();
+
+          if (!this->_mlmodel._hcorresp.empty())
+            {
+              labels_vec->reserve(this->_mlmodel._hcorresp.size());
+
+              for (const auto &kv : this->_mlmodel._hcorresp)
+                {
+                  labels_vec->push_back(kv.second);
+                }
+            }
+          serv_dto->labels = labels_vec;
         }
-      APIData stats;
-      stats.add("flops", this->_model_flops);
-      stats.add("params", this->_model_params);
-      stats.add("data_mem_train",
-                static_cast<long int>(this->_mem_used_train * sizeof(float)));
-      stats.add("data_mem_test",
-                static_cast<long int>(this->_mem_used_test * sizeof(float)));
-      ad.add("stats", stats); // FIXME(sileht): deprecated name, delete me when
-                              // platform use the new name
-      ad.add("model_stats", stats);
-      ad.add("jobs", vad);
-      ad.add("parameters", _init_parameters);
-      ad.add("repository", this->_inputc._model_repo);
-      ad.add("mltype", this->_mltype);
-      if (typeid(this->_outputc) == typeid(UnsupervisedOutput))
-        ad.add("type", std::string("unsupervised"));
-      else
-        ad.add("type", std::string("supervised"));
-      this->_stats.to(ad);
-      return ad;
+
+      // stats
+      this->_stats.to(serv_dto);
+      return serv_dto;
     }
 
     /**
@@ -327,7 +326,7 @@ namespace dd
                                // XXX: due to lock below, queued jobs may not
                                // start in requested order
                                boost::unique_lock<boost::shared_mutex> lock(
-                                   _train_mutex);
+                                   _train_or_predict_mutex);
                                APIData out;
                                int run_code = this->train(ad, out);
                                std::pair<int, APIData> p(local_tcounter,
@@ -340,7 +339,8 @@ namespace dd
         }
       else
         {
-          boost::unique_lock<boost::shared_mutex> lock(_train_mutex);
+          boost::unique_lock<boost::shared_mutex> lock(
+              _train_or_predict_mutex);
           this->_has_predict = false;
           int status = this->train(ad, out);
           APIData ad_params_out = ad.getobj("parameters").getobj("output");
@@ -495,35 +495,36 @@ namespace dd
 
     /**
      * \brief starts a predict job, makes sure no training call is running.
-     * @param ad root data object
-     * @param out output data object
-     * @return predict job status
+     * @param ad root input call object
+     * @param chain whether the predict call is part of a chain call
+     * @return predict output object
      */
-    int predict_job(const APIData &ad, APIData &out, const bool &chain = false)
+    oatpp::Object<DTO::PredictBody> predict_job(const APIData &ad,
+                                                const bool &chain = false)
     {
-      if (!_train_mutex.try_lock_shared())
+      if (!_train_or_predict_mutex.try_lock_shared())
         throw MLServiceLockException(
             "Predict call while training with an offline learning algorithm");
 
       this->_stats.predict_start();
 
-      int err = 0;
+      oatpp::Object<DTO::PredictBody> out = nullptr;
       try
         {
           if (chain)
             const_cast<APIData &>(ad).add("chain", true);
-          err = this->predict(ad, out);
+          out = this->predict(ad);
         }
       catch (std::exception &e)
         {
-          _train_mutex.unlock_shared();
+          _train_or_predict_mutex.unlock_shared();
           this->_stats.predict_end(false);
           throw;
         }
       this->_stats.predict_end(true);
 
-      _train_mutex.unlock_shared();
-      return err;
+      _train_or_predict_mutex.unlock_shared();
+      return out;
     }
 
     std::string _sname;       /**< service name. */
@@ -536,7 +537,7 @@ namespace dd
         _training_jobs; // XXX: the futures' dtor blocks if the object is being
                         // terminated
     std::unordered_map<int, APIData> _training_out;
-    boost::shared_mutex _train_mutex;
+    boost::shared_mutex _train_or_predict_mutex;
   };
 
 }

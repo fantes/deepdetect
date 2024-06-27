@@ -173,8 +173,23 @@ namespace dd
     _logger->info("loading " + model._traced);
     try
       {
-        _traced = std::make_shared<torch::jit::script::Module>(
-            torch::jit::load(model._traced, _device));
+#ifdef USE_MPS
+        // XXX(louisj): this is a workaround for torch v2.0.1, subsequent
+        // versions should have this fixed
+        if (_device.type() == torch::DeviceType::MPS)
+          {
+            std::cout << "LOADING en MPS" << std::endl;
+            _traced = std::make_shared<torch::jit::script::Module>(
+                torch::jit::load(model._traced,
+                                 torch::Device(torch::DeviceType::CPU)));
+            _traced->to(torch::Device(torch::DeviceType::MPS));
+          }
+        else
+#endif
+          {
+            _traced = std::make_shared<torch::jit::script::Module>(
+                torch::jit::load(model._traced, _device));
+          }
       }
     catch (std::exception &e)
       {
@@ -215,15 +230,17 @@ namespace dd
       }
     if (_graph)
       {
-        std::vector<long int> dims = inputc._dataset.datasize(0);
+        std::vector<int64_t> dims = inputc._dataset.datasize(0);
         std::string d;
-        for (long int di : dims)
+        for (int64_t di : dims)
           d += std::to_string(di) + " ";
         _logger->info("input data dimensions : " + d);
         dims.insert(dims.begin(), 1); // dummy batch size
         _graph->finalize(dims);
         if (_graph->needs_reload())
-          _logger->info("net was reallocated due to input dim changes");
+          {
+            _logger->info("net was reallocated due to input dim changes");
+          }
         // reload params after finalize
         graph_model_load(tmodel);
       }
@@ -285,6 +302,20 @@ namespace dd
 
     if (_graph)
       _graph->lstm_continues(pred_dto->parameters->input->continuation);
+  }
+
+  bool TorchModule::is_ready(const std::string &tmplate) const
+  {
+    if (!_native && NativeFactory::valid_template_def(tmplate))
+      return false;
+    if (_graph && _graph->needs_reload())
+      return false;
+    if (_require_linear_head && !_linear_head)
+      return false;
+    if (_require_crnn_head && !_crnn_head)
+      return false;
+
+    return true;
   }
 
   c10::IValue TorchModule::forward(std::vector<c10::IValue> source,
@@ -595,6 +626,131 @@ namespace dd
     return cloned;
   }
 
+  std::string long_number_to_str(int64_t number)
+  {
+    std::string number_str = std::to_string(number);
+    std::reverse(number_str.begin(), number_str.end());
+    std::stringstream ss;
+    for (size_t i = 0; i < number_str.size(); i++)
+      {
+        if (i != 0 && i % 3 == 0)
+          ss << ",";
+        ss << number_str[i];
+      }
+    number_str = ss.str();
+    std::reverse(number_str.begin(), number_str.end());
+    return number_str;
+  }
+
+  void print_native_params(std::shared_ptr<spdlog::logger> logger,
+                           const std::string &name,
+                           const torch::nn::Module &module,
+                           int64_t &param_count, int64_t &frozen_count)
+  {
+    logger->info("## {} parameters", name);
+    param_count = 0;
+    frozen_count = 0;
+    for (const auto &p : module.named_parameters())
+      {
+        std::stringstream sstream;
+        sstream << "name=" << p.key() << ", size=" << p.value().sizes()
+                << ", requires_grad="
+                << (p.value().requires_grad() ? "true" : "false");
+        logger->info(sstream.str());
+
+        // Count parameters
+        int count = 1;
+        for (int s : p.value().sizes())
+          {
+            count *= s;
+          }
+        param_count += count;
+        if (!p.value().requires_grad())
+          frozen_count += count;
+      }
+    logger->info("{} parameters count: {}", name,
+                 long_number_to_str(param_count));
+    if (frozen_count != 0)
+      {
+        logger->info("\tfrozen = {}", long_number_to_str(frozen_count));
+      }
+  }
+
+  void TorchModule::compute_and_print_model_info()
+  {
+    int64_t total_param_count = 0;
+    int64_t total_frozen_count = 0;
+    if (_graph)
+      {
+        int64_t graph_param_count, graph_frozen_count;
+        print_native_params(_logger, "Graph", *_graph, graph_param_count,
+                            graph_frozen_count);
+        total_param_count += graph_param_count;
+        total_frozen_count += graph_frozen_count;
+      }
+    if (_native)
+      {
+        int64_t native_param_count, native_frozen_count;
+        print_native_params(_logger, "Native", *_native, native_param_count,
+                            native_frozen_count);
+        total_param_count += native_param_count;
+        total_frozen_count += native_frozen_count;
+      }
+    if (_traced)
+      {
+        _logger->info("## Traced parameters");
+        int64_t traced_param_count = 0;
+        int64_t traced_frozen_count = 0;
+        for (const auto &p : _traced->named_parameters())
+          {
+            std::stringstream sstream;
+            sstream << "name=" << p.name << ", size=" << p.value.sizes()
+                    << ", requires_grad="
+                    << (p.value.requires_grad() ? "true" : "false");
+            _logger->info(sstream.str());
+
+            // Count parameters
+            int count = 1;
+            for (int s : p.value.sizes())
+              {
+                count *= s;
+              }
+            traced_param_count += count;
+            if (!p.value.requires_grad())
+              traced_frozen_count += count;
+          }
+        _logger->info("Traced parameters count: {}",
+                      long_number_to_str(traced_param_count));
+        if (traced_frozen_count != 0)
+          {
+            _logger->info("\tfrozen = {}",
+                          long_number_to_str(traced_frozen_count));
+          }
+        total_param_count += traced_param_count;
+        total_frozen_count += traced_frozen_count;
+      }
+    if (_linear_head)
+      {
+        int64_t linear_param_count, linear_frozen_count;
+        print_native_params(_logger, "Linear", *_linear_head,
+                            linear_param_count, linear_frozen_count);
+        total_param_count += linear_param_count;
+        total_frozen_count += linear_frozen_count;
+      }
+    if (_crnn_head)
+      {
+        int64_t crnn_param_count, crnn_frozen_count;
+        print_native_params(_logger, "CRNN", *_crnn_head, crnn_param_count,
+                            crnn_frozen_count);
+        total_param_count += crnn_param_count;
+        total_frozen_count += crnn_frozen_count;
+      }
+    _logger->info("## Total number of parameters: {}",
+                  long_number_to_str(total_param_count));
+    _params_count = total_param_count;
+    _frozen_params_count = total_frozen_count;
+  }
+
   template void TorchModule::post_transform(
       const std::string tmpl, const APIData &template_params,
       const ImgTorchInputFileConn &inputc, const TorchModel &tmodel,
@@ -610,6 +766,11 @@ namespace dd
       const ImgTorchInputFileConn &inputc, const TorchModel &tmodel,
       const torch::Device &device,
       const oatpp::Object<DTO::ServicePredict> &pred_dto);
+
+  template void TorchModule::create_native_template(
+      const std::string &tmpl, const APIData &lib_ad,
+      const ImgTorchInputFileConn &inputc, const TorchModel &tmodel,
+      const torch::Device &device);
 
   template void TorchModule::post_transform(
       const std::string tmpl, const APIData &template_params,
@@ -627,6 +788,11 @@ namespace dd
       const torch::Device &device,
       const oatpp::Object<DTO::ServicePredict> &pred_dto);
 
+  template void TorchModule::create_native_template(
+      const std::string &tmpl, const APIData &lib_ad,
+      const VideoTorchInputFileConn &inputc, const TorchModel &tmodel,
+      const torch::Device &device);
+
   template void TorchModule::post_transform(
       const std::string tmpl, const APIData &template_params,
       const TxtTorchInputFileConn &inputc, const TorchModel &tmodel,
@@ -643,6 +809,11 @@ namespace dd
       const torch::Device &device,
       const oatpp::Object<DTO::ServicePredict> &pred_dto);
 
+  template void TorchModule::create_native_template(
+      const std::string &tmpl, const APIData &lib_ad,
+      const TxtTorchInputFileConn &inputc, const TorchModel &tmodel,
+      const torch::Device &device);
+
   template void TorchModule::post_transform(
       const std::string tmpl, const APIData &template_params,
       const CSVTSTorchInputFileConn &inputc, const TorchModel &tmodel,
@@ -658,4 +829,9 @@ namespace dd
       const CSVTSTorchInputFileConn &inputc, const TorchModel &tmodel,
       const torch::Device &device,
       const oatpp::Object<DTO::ServicePredict> &pred_dto);
+
+  template void TorchModule::create_native_template(
+      const std::string &tmpl, const APIData &lib_ad,
+      const CSVTSTorchInputFileConn &inputc, const TorchModel &tmodel,
+      const torch::Device &device);
 }

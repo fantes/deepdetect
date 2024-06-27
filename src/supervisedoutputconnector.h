@@ -23,7 +23,11 @@
 #define SUPERVISEDOUTPUTCONNECTOR_H
 #define TS_METRICS_EPSILON 1E-2
 
+#include <sstream>
+#include <iomanip>
+
 #include "dto/output_connector.hpp"
+#include "dto/predict_out.hpp"
 
 template <typename T>
 bool SortScorePairDescend(const std::pair<double, T> &pair1,
@@ -396,10 +400,12 @@ namespace dd
      * @param ad_in data output object from the API call
      * @param ad_out data object as the call response
      */
-    void finalize(const APIData &ad_in, APIData &ad_out, MLModel *mlm)
+    oatpp::Object<DTO::PredictBody>
+    finalize(const APIData &ad_in, const OutputConnectorConfig &config,
+             MLModel *mlm)
     {
       auto output_params = ad_in.createSharedDTO<DTO::OutputConnector>();
-      finalize(output_params, ad_out, mlm);
+      return finalize(output_params, config, mlm);
     }
 
     /**
@@ -407,51 +413,27 @@ namespace dd
      * @param ad_in data output object from the API call
      * @param ad_out data object as the call response
      */
-    void finalize(oatpp::Object<DTO::OutputConnector> output_params,
-                  APIData &ad_out, MLModel *mlm)
+    oatpp::Object<DTO::PredictBody>
+    finalize(oatpp::Object<DTO::OutputConnector> output_params,
+             const OutputConnectorConfig &config, MLModel *mlm)
     {
-#ifndef USE_SIMSEARCH
       (void)mlm;
-#endif
+      auto out_dto = DTO::PredictBody::createShared();
+
       SupervisedOutput bcats(*this);
-      bool regression = false;
-      bool autoencoder = false;
-      int nclasses = -1;
-      if (ad_out.has("nclasses"))
-        nclasses = ad_out.get("nclasses").get<int>();
-      if (ad_out.has("regression"))
-        {
-          if (ad_out.get("regression").get<bool>())
-            {
-              regression = true;
-              _best = ad_out.get("nclasses").get<int>();
-            }
-          ad_out.erase("regression");
-          ad_out.erase("nclasses");
-        }
-      if (ad_out.has("autoencoder") && ad_out.get("autoencoder").get<bool>())
-        {
-          autoencoder = true;
-          _best = 1;
-          ad_out.erase("autoencoder");
-        }
+      int nclasses = config._nclasses;
+      bool regression = config._regression;
+      if (regression)
+        _best = config._nclasses;
+      bool autoencoder = config._autoencoder;
+      if (autoencoder)
+        _best = 1;
 
-      bool has_bbox = ad_out.has("bbox") && ad_out.get("bbox").get<bool>();
-      bool has_roi = ad_out.has("roi") && ad_out.get("roi").get<bool>();
-      bool has_mask = ad_out.has("mask") && ad_out.get("mask").get<bool>();
-      bool has_multibox_rois = has_roi && ad_out.has("multibox_rois")
-                               && ad_out.get("multibox_rois").get<bool>();
-      bool timeseries
-          = ad_out.has("timeseries") && ad_out.get("timeseries").get<bool>();
-
-      if (timeseries)
-        ad_out.erase("timeseries");
-
-      if (has_bbox)
-        {
-          ad_out.erase("nclasses");
-          ad_out.erase("bbox");
-        }
+      bool has_bbox = config._has_bbox;
+      bool has_roi = config._has_roi;
+      bool has_mask = config._has_mask;
+      bool has_multibox_rois = config._has_roi && config._multibox_rois;
+      bool timeseries = config._timeseries;
 
       if (output_params->best == nullptr)
         output_params->best = _best;
@@ -718,11 +700,13 @@ namespace dd
       if (has_multibox_rois)
         has_roi = false;
       if (!timeseries)
-        bcats.to_ad(ad_out, regression, autoencoder, has_bbox, has_roi,
-                    has_mask, timeseries, indexed_uris);
+        bcats.to_dto(out_dto, regression, autoencoder, has_bbox, has_roi,
+                     has_mask, timeseries, indexed_uris);
       else
-        to_ad(ad_out, regression, autoencoder, has_bbox, has_roi, has_mask,
-              timeseries, indexed_uris);
+        to_dto(out_dto, regression, autoencoder, has_bbox, has_roi, has_mask,
+               timeseries, indexed_uris);
+
+      return out_dto;
     }
 
     struct PredictionAndAnswer
@@ -845,19 +829,88 @@ namespace dd
             }
           if (bbox)
             {
-              bool bbmap = (std::find(measures.begin(), measures.end(), "map")
-                            != measures.end());
-              if (bbmap)
+              // required iou thresholds for map. If there are more than one
+              // threshold, the global map is the mean over the different iou
+              // thresholds.
+              std::vector<int> thresholds;
+              bool has_map = find_ap_iou_thresholds(measures, thresholds);
+
+              if (has_map)
                 {
-                  std::map<int, float> aps;
-                  double bmap = ap(ad_res, aps);
-                  meas_out.add("map", bmap);
-                  for (auto ap : aps)
+                  double sum_map = 0;
+                  std::map<int, float> sum_aps;
+                  int ap_count = 0;
+
+                  // map for each threshold
+                  for (int iou_thres : thresholds)
                     {
-                      std::string s = "map_" + std::to_string(ap.first);
-                      meas_out.add(s, static_cast<double>(ap.second));
+                      std::map<int, float> aps;
+                      double bmap = ap(ad_res, aps, iou_thres);
+                      std::string map_key = "map";
+                      if (iou_thres != 0)
+                        {
+                          std::stringstream ss;
+                          ss << map_key << "-" << std::setfill('0')
+                             << std::setw(2) << iou_thres;
+                          map_key = ss.str();
+                        }
+                      meas_out.add(map_key, bmap);
+                      for (auto ap : aps)
+                        {
+                          std::string s
+                              = map_key + "_" + std::to_string(ap.first);
+                          meas_out.add(s, static_cast<double>(ap.second));
+                        }
+
+                      sum_map += bmap;
+                      if (sum_aps.size() == 0)
+                        sum_aps = aps;
+                      else
+                        {
+                          for (auto ap : aps)
+                            sum_aps[ap.first] += ap.second;
+                        }
+                      ap_count++;
                     }
+
+                  // mean of all thresholds
+                  if (thresholds.size() > 0)
+                    {
+                      meas_out.add("map", sum_map / ap_count);
+                      for (auto sum_ap : sum_aps)
+                        {
+                          std::string s
+                              = "map_" + std::to_string(sum_ap.first);
+                          meas_out.add(s, static_cast<double>(sum_ap.second
+                                                              / ap_count));
+                        }
+                    }
+
+                  // false positives
+                  std::map<int, float> fp_by_cls;
+                  std::map<int, float> recall_by_cls;
+
+                  // TODO conf_thres as a parameter
+                  APIData bad = ad_res.getobj("0");
+                  // TODO chose policy to select iou threshold
+                  std::string key = "map-" + std::to_string(thresholds.at(0));
+                  if (bad.has(key))
+                    bad = bad.getobj(key);
+                  int pos_count = ad_res.get("pos_count").get<int>();
+
+                  compute_positives(pos_count, bad, fp_by_cls, recall_by_cls,
+                                    0.5);
+                  double fp_mean = 0;
+                  for (auto e : fp_by_cls)
+                    {
+                      std::string key = "fp_" + std::to_string(e.first);
+                      meas_out.add(key, static_cast<double>(e.second));
+                      fp_mean += static_cast<double>(e.second);
+                    }
+                  fp_mean /= fp_by_cls.size();
+                  meas_out.add("fp", fp_mean);
                 }
+
               bool raw = (std::find(measures.begin(), measures.end(), "raw")
                           != measures.end());
               if (raw)
@@ -1606,6 +1659,35 @@ namespace dd
             else
               meas_thres = 0.0;
           }
+    }
+
+    /** \param thresholds the requested iou thresholds in percent (int)
+     * \return true if map is requested, false otherwise */
+    static bool
+    find_ap_iou_thresholds(const std::vector<std::string> &measures,
+                           std::vector<int> &thresholds)
+    {
+      bool has_map = false;
+      for (std::string s : measures)
+        {
+          if (s.find("map") != std::string::npos)
+            {
+              has_map = true;
+              std::vector<std::string> sv = dd_utils::split(s, '-');
+              int iou_thres = 0;
+
+              if (sv.size() == 2)
+                {
+                  iou_thres = std::atoi(sv.at(1).c_str());
+                  thresholds.push_back(iou_thres);
+                }
+            }
+        }
+
+      // Default threshold is 0.5 (map 50)
+      if (thresholds.empty())
+        thresholds.push_back(50);
+      return has_map;
     }
 
     static double straight_meas(const APIData &ad)
@@ -2407,13 +2489,22 @@ namespace dd
       return ap;
     }
 
-    static double ap(const APIData &ad, std::map<int, float> &APs)
+    /**
+     * Compute AP for all classes and mean AP
+     * \param APs std::map containing AP for each class
+     * \param thres iou threshold for map in percent
+     */
+    static double ap(const APIData &ad, std::map<int, float> &APs, int thres)
     {
       double mmAP = 0.0;
       std::map<int, int> APs_count;
       int APs_count_all = 0;
       // extract tp, fp, labels
       APIData bad = ad.getobj("0");
+      std::string map_key = "map-" + std::to_string(thres);
+      if (bad.has(map_key))
+        bad = bad.getobj(map_key);
+      // else: default threshold (legacy)
       int pos_count = ad.get("pos_count").get<int>();
       for (int i = 0; i < pos_count; i++)
         {
@@ -2475,6 +2566,61 @@ namespace dd
       if (APs_count_all == 0)
         return 0.0;
       return mmAP / static_cast<double>(APs_count_all);
+    }
+
+    /** Compute recall and number of false positives (fp) */
+    static void compute_positives(int pos_count, const APIData &bad,
+                                  std::map<int, float> &recall_by_cls,
+                                  std::map<int, float> &fp_by_cls,
+                                  float conf_thres)
+    {
+      std::map<int, float> count_by_cls;
+
+      for (int i = 0; i < pos_count; i++)
+        {
+          std::vector<APIData> vbad = bad.getv(std::to_string(i));
+          for (size_t j = 0; j < vbad.size(); j++)
+            {
+              std::vector<double> tp_d
+                  = vbad.at(j).get("tp_d").get<std::vector<double>>();
+              std::vector<int> tp_i
+                  = vbad.at(j).get("tp_i").get<std::vector<int>>();
+              int num_pos = vbad.at(j).get("num_pos").get<int>();
+              int label = vbad.at(j).get("label").get<int>();
+              double recall = 0, fp = 0;
+
+              for (size_t k = 0; k < tp_d.size(); k++)
+                {
+                  if (tp_d[k] > conf_thres)
+                    {
+                      if (tp_i.at(k) == 1)
+                        recall += 1.0 / num_pos;
+                      else
+                        fp += 1;
+                    }
+                  else
+                    break; // Assume preds are sorted by confidence threshold
+                }
+
+              if (fp_by_cls.find(label) == fp_by_cls.end())
+                {
+                  recall_by_cls[label] = recall;
+                  fp_by_cls[label] = fp;
+                  count_by_cls[label] = num_pos;
+                }
+              else
+                {
+                  recall_by_cls[label] += recall;
+                  fp_by_cls[label] += fp;
+                  count_by_cls[label] += num_pos;
+                }
+            }
+        }
+
+      for (auto &e : count_by_cls)
+        {
+          fp_by_cls[e.first] /= e.second;
+        }
     }
 
     // measure: AUC
@@ -2827,51 +2973,40 @@ namespace dd
      * @param has_mask whether a mask creation task
      * @param indexed_uris list of indexed uris, if any
      */
-    void to_ad(APIData &out, const bool &regression, const bool &autoencoder,
-               const bool &has_bbox, const bool &has_roi, const bool &has_mask,
-               const bool &timeseries,
-               const std::unordered_set<std::string> &indexed_uris) const
+    void to_dto(oatpp::Object<DTO::PredictBody> out, const bool &regression,
+                const bool &autoencoder, const bool &has_bbox,
+                const bool &has_roi, const bool &has_mask,
+                const bool &timeseries,
+                const std::unordered_set<std::string> &indexed_uris) const
     {
 #ifndef USE_SIMSEARCH
       (void)indexed_uris;
 #endif
-      static std::string cl = "classes";
-      static std::string ve = "vector";
-      static std::string ae = "losses";
-      static std::string bb = "bbox";
-      static std::string roi = "vals";
-      static std::string rois = "rois";
-      static std::string series = "series";
-      static std::string mask = "mask";
-      static std::string phead = "prob";
-      static std::string chead = "cat";
-      static std::string vhead = "val";
-      static std::string ahead = "loss";
-      static std::string last = "last";
       std::unordered_set<std::string>::const_iterator hit;
-      std::vector<APIData> vpred;
       for (size_t i = 0; i < _vvcats.size(); i++)
         {
-          APIData adpred;
-          std::vector<APIData> v;
+          // APIData adpred;
+          auto pred_dto = DTO::Prediction::createShared();
+          auto v = oatpp::Vector<
+              oatpp::Object<DTO::PredictClass>>::createShared();
           auto bit = _vvcats.at(i)._bboxes.begin();
           auto vit = _vvcats.at(i)._vals.begin();
           auto mit = _vvcats.at(i)._cats.begin();
           auto maskit = _vvcats.at(i)._masks.begin();
           while (mit != _vvcats.at(i)._cats.end())
             {
-              APIData nad;
+              auto cls_dto = DTO::PredictClass::createShared();
               if (!autoencoder)
-                nad.add(chead, (*mit).second);
+                cls_dto->cat = (*mit).second;
               if (regression)
-                nad.add(vhead, (*mit).first);
+                cls_dto->val = (*mit).first;
               else if (autoencoder)
-                nad.add(ahead, (*mit).first);
+                cls_dto->loss = (*mit).first;
               else
-                nad.add(phead, (*mit).first);
+                cls_dto->prob = (*mit).first;
               if (has_bbox || has_roi || has_mask)
                 {
-                  nad.add(bb, (*bit).second);
+                  cls_dto->bbox = (*bit).second.createSharedDTO<DTO::BBox>();
                   ++bit;
                 }
               if (has_roi)
@@ -2882,54 +3017,53 @@ namespace dd
                   /* std::copy(keys.begin(), keys.end(),
                    * std::ostream_iterator<std::string>(std::cout, "'")); */
                   /* std::cout << std::endl; */
-                  nad.add(
-                      roi,
-                      (*vit).second.get("vals").get<std::vector<double>>());
+                  cls_dto->vals
+                      = (*vit).second.get("vals").get<std::vector<double>>();
                   ++vit;
                 }
               if (has_mask)
                 {
-                  nad.add(mask, (*maskit).second);
+                  cls_dto->mask = (*maskit).second;
                   ++maskit;
                 }
               ++mit;
               if (mit == _vvcats.at(i)._cats.end())
-                nad.add(last, true);
-              v.push_back(nad);
+                cls_dto->last = true;
+              v->push_back(cls_dto);
             }
           if (_vvcats.at(i)._loss
               > 0.0) // XXX: not set by Caffe in prediction mode for now
-            adpred.add("loss", _vvcats.at(i)._loss);
-          adpred.add("uri", _vvcats.at(i)._label);
+            pred_dto->loss = _vvcats.at(i)._loss;
+          pred_dto->uri = _vvcats.at(i)._label;
 #ifdef USE_SIMSEARCH
           if (!_vvcats.at(i)._index_uri.empty())
-            adpred.add("index_uri", _vvcats.at(i)._index_uri);
+            pred_dto->index_uri = _vvcats.at(i)._index_uri;
           if (!indexed_uris.empty()
               && (hit = indexed_uris.find(_vvcats.at(i)._label))
                      != indexed_uris.end())
-            adpred.add("indexed", true);
+            pred_dto->indexed = true;
           if (!_vvcats.at(i)._nns.empty() || !_vvcats.at(i)._bbox_nns.empty())
             {
               if (!has_roi)
                 {
-                  std::vector<APIData> ad_nns;
+                  pred_dto->nns = oatpp::Vector<oatpp::Any>::createShared();
                   auto nnit = _vvcats.at(i)._nns.begin();
                   while (nnit != _vvcats.at(i)._nns.end())
                     {
                       APIData ad_nn;
                       ad_nn.add("uri", (*nnit).second._uri);
                       ad_nn.add("dist", (*nnit).first);
-                      ad_nns.push_back(ad_nn);
+                      pred_dto->nns->push_back(DTO::DTOApiData{ ad_nn });
                       ++nnit;
                     }
-                  adpred.add("nns", ad_nns);
                 }
               else // has_roi
                 {
                   for (size_t bb = 0; bb < _vvcats.at(i)._bbox_nns.size();
                        bb++)
                     {
-                      std::vector<APIData> ad_nns;
+                      v->at(bb)->nns
+                          = oatpp::Vector<oatpp::Any>::createShared();
                       auto nnit = _vvcats.at(i)._bbox_nns.at(bb).begin();
                       while (nnit != _vvcats.at(i)._bbox_nns.at(bb).end())
                         {
@@ -2944,11 +3078,10 @@ namespace dd
                           ad_bbox.add("xmax", (*nnit).second._bbox.at(2));
                           ad_bbox.add("ymax", (*nnit).second._bbox.at(3));
                           ad_nn.add("bbox", ad_bbox);
-                          ad_nns.push_back(ad_nn);
+                          v->at(bb)->nns->push_back(DTO::DTOApiData{ ad_nn });
                           ++nnit;
                         }
-                      v.at(bb).add("nns",
-                                   ad_nns); // v is in roi object vector
+                      // v will be stored in "rois" field
                     }
                 }
             }
@@ -2958,29 +3091,28 @@ namespace dd
               auto sit = _vvcats.at(i)._series.begin();
               while (sit != _vvcats.at(i)._series.end())
                 {
-                  APIData nad;
-                  nad.add("out",
-                          (*sit).second.get("out").get<std::vector<double>>());
+                  auto cls_dto = DTO::PredictClass::createShared();
+                  cls_dto->out
+                      = (*sit).second.get("out").get<std::vector<double>>();
                   ++sit;
                   if (sit == _vvcats.at(i)._series.end())
-                    nad.add(last, true);
-                  v.push_back(nad);
+                    cls_dto->last = true;
+                  v->push_back(cls_dto);
                 }
             }
 
           if (timeseries)
-            adpred.add(series, v);
+            pred_dto->series = v;
           else if (regression)
-            adpred.add(ve, v);
+            pred_dto->vector = v;
           else if (autoencoder)
-            adpred.add(ae, v);
+            pred_dto->losses = v;
           else if (has_roi)
-            adpred.add(rois, v);
+            pred_dto->rois = v;
           else
-            adpred.add(cl, v);
-          vpred.push_back(adpred);
+            pred_dto->classes = v;
+          out->predictions->push_back(pred_dto);
         }
-      out.add("predictions", vpred);
     }
 
     std::unordered_map<std::string, int>

@@ -395,17 +395,24 @@ namespace dd
 
     if (sample)
       {
+        int img_width = src.cols;
+        int img_height = src.rows;
+        std::uniform_int_distribution<int> uniform_int_crop_x(
+            0, img_width - cp._crop_size);
+        std::uniform_int_distribution<int> uniform_int_crop_y(
+            0, img_height - cp._crop_size);
+
 #pragma omp critical
         {
           if (test)
             {
-              crop_x = cp._uniform_int_crop_x(_rnd_test_gen);
-              crop_y = cp._uniform_int_crop_y(_rnd_test_gen);
+              crop_x = uniform_int_crop_x(_rnd_test_gen);
+              crop_y = uniform_int_crop_y(_rnd_test_gen);
             }
           else
             {
-              crop_x = cp._uniform_int_crop_x(_rnd_gen);
-              crop_y = cp._uniform_int_crop_y(_rnd_gen);
+              crop_x = uniform_int_crop_x(_rnd_gen);
+              crop_y = uniform_int_crop_y(_rnd_gen);
             }
         }
       }
@@ -464,20 +471,22 @@ namespace dd
 
 #pragma omp critical
     {
+      int img_width = src.cols;
+      int img_height = src.rows;
       // get shape and area to erase
       int w = 0, h = 0, rect_x = 0, rect_y = 0;
       if (cp._w == 0 && cp._h == 0)
         {
-          float s = cp._uniform_real_cutout_s(_rnd_gen) * cp._img_width
-                    * cp._img_height;                    // area
+          float s = cp._uniform_real_cutout_s(_rnd_gen) * img_width
+                    * img_height;                        // area
           float r = cp._uniform_real_cutout_r(_rnd_gen); // aspect ratio
 
-          w = std::min(cp._img_width,
+          w = std::min(img_width,
                        static_cast<int>(std::floor(std::sqrt(s / r))));
-          h = std::min(cp._img_height,
+          h = std::min(img_height,
                        static_cast<int>(std::floor(std::sqrt(s * r))));
-          std::uniform_int_distribution<int> distx(0, cp._img_width - w);
-          std::uniform_int_distribution<int> disty(0, cp._img_height - h);
+          std::uniform_int_distribution<int> distx(0, img_width - w);
+          std::uniform_int_distribution<int> disty(0, img_height - h);
           rect_x = distx(_rnd_gen);
           rect_y = disty(_rnd_gen);
         }
@@ -795,6 +804,15 @@ namespace dd
     if (_noise_params._prob == 0.0)
       return;
 
+    // sanity check
+    bool img_is_bw = src.channels() == 1;
+    if (img_is_bw
+        && (_noise_params._hist_eq || _noise_params._decolorize
+            || _noise_params._jpg || _noise_params._convert_to_hsv
+            || _noise_params._convert_to_lab))
+      throw std::runtime_error(
+          "Image has one channel when 3 channel dataaug is enabled");
+
     if (_noise_params._rgb)
       {
         cv::Mat bgr;
@@ -837,6 +855,13 @@ namespace dd
   {
     if (_distort_params._prob == 0.0)
       return;
+
+    bool img_is_bw = src.channels() == 1;
+    if (img_is_bw
+        && (_distort_params._saturation || _distort_params._hue
+            || _distort_params._channel_order))
+      throw std::runtime_error(
+          "Image has one channel when 3 channel dataaug is enabled");
 
     if (_distort_params._rgb)
       {
@@ -1020,17 +1045,34 @@ namespace dd
       return;
     const int noise_pixels_n
         = std::floor(_noise_params._saltpepper_fraction * src.cols * src.rows);
-    const std::vector<uchar> val = { 0, 0, 0 };
+    const std::vector<uchar> val_black = { 0, 0, 0 };
+    const std::vector<uchar> val_white = { 255, 255, 255 };
     if (src.channels() == 1)
       {
 #pragma omp critical
         {
-          for (int k = 0; k < noise_pixels_n; ++k)
+          if (src.depth() == CV_8U) // general case
             {
-              const int i = _uniform_real_1(_rnd_gen) * src.cols;
-              const int j = _uniform_real_1(_rnd_gen) * src.rows;
-              uchar *ptr = src.ptr<uchar>(j);
-              ptr[i] = val[0];
+              for (int k = 0; k < noise_pixels_n; ++k)
+                {
+                  const int i = _uniform_real_1(_rnd_gen) * src.cols;
+                  const int j = _uniform_real_1(_rnd_gen) * src.rows;
+                  uchar *ptr = src.ptr<uchar>(j);
+                  if (_bernouilli(_rnd_gen))
+                    ptr[i] = val_black[0];
+                  else
+                    ptr[i] = val_white[0];
+                }
+            }
+          else // black pixels only
+            {
+              for (int k = 0; k < noise_pixels_n; ++k)
+                {
+                  const int i = _uniform_real_1(_rnd_gen) * src.cols;
+                  const int j = _uniform_real_1(_rnd_gen) * src.rows;
+                  uchar *ptr = src.ptr<uchar>(j);
+                  ptr[i] = val_black[0];
+                }
             }
         }
       }
@@ -1038,14 +1080,38 @@ namespace dd
       { // color image
 #pragma omp critical
         {
-          for (int k = 0; k < noise_pixels_n; ++k)
+          if (src.depth() == CV_8U) // general case
             {
-              const int i = _uniform_real_1(_rnd_gen) * src.cols;
-              const int j = _uniform_real_1(_rnd_gen) * src.rows;
-              cv::Vec3b *ptr = src.ptr<cv::Vec3b>(j);
-              (ptr[i])[0] = val[0];
-              (ptr[i])[1] = val[1];
-              (ptr[i])[2] = val[2];
+              for (int k = 0; k < noise_pixels_n; ++k)
+                {
+                  const int i = _uniform_real_1(_rnd_gen) * src.cols;
+                  const int j = _uniform_real_1(_rnd_gen) * src.rows;
+                  cv::Vec3b *ptr = src.ptr<cv::Vec3b>(j);
+                  if (_bernouilli(_rnd_gen))
+                    {
+                      (ptr[i])[0] = val_black[0];
+                      (ptr[i])[1] = val_black[1];
+                      (ptr[i])[2] = val_black[2];
+                    }
+                  else
+                    {
+                      (ptr[i])[0] = val_white[0];
+                      (ptr[i])[1] = val_white[1];
+                      (ptr[i])[2] = val_white[2];
+                    }
+                }
+            }
+          else // black only
+            {
+              for (int k = 0; k < noise_pixels_n; ++k)
+                {
+                  const int i = _uniform_real_1(_rnd_gen) * src.cols;
+                  const int j = _uniform_real_1(_rnd_gen) * src.rows;
+                  cv::Vec3b *ptr = src.ptr<cv::Vec3b>(j);
+                  (ptr[i])[0] = val_black[0];
+                  (ptr[i])[1] = val_black[1];
+                  (ptr[i])[2] = val_black[2];
+                }
             }
         }
       }
@@ -1116,7 +1182,7 @@ namespace dd
     {
       delta = _distort_params._uniform_real_saturation(_rnd_gen);
     }
-    if (fabs(delta - 1.f) != 1e-3)
+    if (fabs(delta - 1.f) >= 1e-3)
       {
         cv::Mat tmp;
 
@@ -1176,7 +1242,7 @@ namespace dd
         cv::split(src, channels);
 
         // Shuffle the channels
-        std::random_shuffle(channels.begin(), channels.end());
+        std::shuffle(channels.begin(), channels.end(), _rnd_gen);
         cv::merge(channels, src);
       }
   }

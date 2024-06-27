@@ -23,22 +23,17 @@
 #ifndef TORCH_MODULE_H
 #define TORCH_MODULE_H
 
-// TODO this should normally be defined by pytorch
-#define AT_PARALLEL_OPENMP 1
-
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunused-parameter"
 #include <torch/torch.h>
+#include <torch/script.h>
+#include <torch/nn/pimpl.h>
 #pragma GCC diagnostic pop
+
 #include "torchmodel.h"
 #include "torchgraphbackend.h"
 #include "native/native_net.h"
 #include "native/templates/crnn_head.hpp"
-#include <torch/script.h>
-#include <torch/nn/pimpl.h>
-#if !defined(CPU_ONLY)
-#include <torch/nn/parallel/data_parallel.h>
-#endif
 
 namespace dd
 {
@@ -166,6 +161,12 @@ namespace dd
         const torch::Device &device,
         const oatpp::Object<DTO::ServicePredict> &pred_dto);
 
+    /** Returns true if the model has been fully initialized and is ready for
+     * use, and false if some parts still need to be allocated
+     *
+     * \param tmplate native template used to initialize the model. */
+    bool is_ready(const std::string &tmplate) const;
+
     /**
      * \brief see torch::module::to
      * @param device cpu / gpu
@@ -193,6 +194,12 @@ namespace dd
      **/
     std::shared_ptr<TorchModule> clone(torch::Device device);
 
+    /**
+     * \brief print model information such as parameter count, number of
+     * parameters for each layer, whether the layers are frozen or not
+     **/
+    void compute_and_print_model_info();
+
   public:
     std::shared_ptr<torch::jit::script::Module>
         _traced; /**< traced (torchscript) module, if any */
@@ -205,6 +212,10 @@ namespace dd
     // heads
     torch::nn::Linear _linear_head = nullptr;
     CRNNHead _crnn_head = nullptr;
+
+    // stats
+    int _params_count = 0;        /**< number of parameters */
+    int _frozen_params_count = 0; /**< number of frozen parameters */
 
     bool _require_linear_head = false;
     bool _require_crnn_head = false;

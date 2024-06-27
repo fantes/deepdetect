@@ -1,6 +1,6 @@
 /**
  * DeepDetect
- * Copyright (c) 2021 Jolibrain SASU
+ * Copyright (c) 2023 Jolibrain SASU
  * Author: Louis Jean <louis.jean@jolibrain.com>
  *
  * This file is part of deepdetect.
@@ -19,32 +19,40 @@
  * along with deepdetect.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "ddtypes.hpp"
+#ifndef DTO_MEASURE_HPP
+#define DTO_MEASURE_HPP
+
+#include "dd_config.h"
+#include "oatpp/core/Types.hpp"
+#include "oatpp/core/macro/codegen.hpp"
 
 namespace dd
 {
   namespace DTO
   {
-    namespace __class
+#include OATPP_CODEGEN_BEGIN(DTO) ///< Begin DTO codegen section
+
+    class Measure : public oatpp::DTO
     {
-      const oatpp::ClassId APIDataClass::CLASS_ID("APIData");
+    public:
+      DTO_INIT(Measure, DTO /* extends */)
 
-      const oatpp::ClassId GpuIdsClass::CLASS_ID("GpuIds");
+      DTO_FIELD_INFO(measure)
+      {
+        info->description = "Measure from the latest iteration.";
+      }
+      DTO_FIELD(APIData, measure);
 
-      const oatpp::ClassId ImageClass::CLASS_ID("Image");
+      DTO_FIELD_INFO(measure_hist)
+      {
+        info->description
+            = "Measure history during training. Used to make loss graphs etc";
+      }
+      DTO_FIELD(APIData, measure_hist);
+    };
 
-      template <>
-      const oatpp::ClassId DTOVectorClass<double>::CLASS_ID("vector<double>");
-
-      template <>
-      const oatpp::ClassId
-          DTOVectorClass<uint8_t>::CLASS_ID("vector<uint8_t>");
-
-      template <>
-      const oatpp::ClassId DTOVectorClass<bool>::CLASS_ID("vector<bool>");
-
-      template class DTOVectorClass<double>;
-      template class DTOVectorClass<bool>;
-    }
+#include OATPP_CODEGEN_END(DTO) ///< End DTO codegen section
   }
 }
+
+#endif // DTO_MEASURE_HPP

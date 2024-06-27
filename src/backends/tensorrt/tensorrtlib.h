@@ -20,11 +20,11 @@
 #ifndef TENSORRTLIB_H
 #define TENSORRTLIB_H
 
-#include "tensorrtmodel.h"
-#include "apidata.h"
 #include "NvCaffeParser.h"
 #include "NvInfer.h"
 
+#include "apidata.h"
+#include "tensorrtmodel.h"
 #include "error_recorder.hpp"
 
 namespace dd
@@ -105,7 +105,7 @@ namespace dd
 
     int train(const APIData &ad, APIData &out);
 
-    int predict(const APIData &ad, APIData &out);
+    oatpp::Object<DTO::PredictBody> predict(const APIData &ad);
 
     void model_type(const std::string &param_file, std::string &mltype);
 
@@ -127,6 +127,7 @@ namespace dd
         _template; /**< template for models that require specific treatment */
 
     //!< The TensorRT engine used to run the network
+    std::shared_ptr<TRTErrorRecorder> _error_recorder = nullptr;
     std::shared_ptr<nvinfer1::IInt8Calibrator> _calibrator = nullptr;
     std::shared_ptr<nvinfer1::ICudaEngine> _engine = nullptr;
     std::shared_ptr<nvinfer1::IBuilder> _builder = nullptr;
@@ -142,13 +143,15 @@ namespace dd
     // detection
     bool _need_nms = false;
 
+    // XXX: Single buffer vector kept for backward compatibility
     std::vector<void *> _buffers;
 
     bool _TRTContextReady = false;
 
-    int _inputIndex;
-    int _outputIndex0;
-    int _outputIndex1;
+    std::vector<std::string> _inputNames;
+    std::vector<int> _inputIndices;
+    std::vector<std::string> _outputNames;
+    std::vector<int> _outputIndices;
 
     bool _first_predict
         = true; // do some cuda allocations only at first predict
@@ -168,6 +171,9 @@ namespace dd
     nvinfer1::ICudaEngine *read_engine_from_caffe(const std::string &out_blob);
 
     nvinfer1::ICudaEngine *read_engine_from_onnx();
+
+    /** create buffer array with inputs and output count */
+    void allocate_buffer_array();
   };
 }
 #endif

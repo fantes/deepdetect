@@ -20,6 +20,8 @@
  */
 
 #include "chain_actions.h"
+
+#include <unordered_set>
 #include <opencv2/opencv.hpp>
 #ifdef USE_CUDA_CV
 #include <opencv2/cudaimgproc.hpp>
@@ -28,9 +30,8 @@
 #define CV_BGR2RGB cv::COLOR_BGR2RGB
 #define CV_RGB2BGR cv::COLOR_RGB2BGR
 #endif
-#include <unordered_set>
+
 #include "utils/utils.hpp"
-#include "dto/predict_out.hpp"
 
 #ifdef USE_DLIB
 #include "backends/dlib/dlib_actions.h"
@@ -38,34 +39,27 @@
 
 namespace dd
 {
-  void ImgsCropAction::apply(APIData &model_out, ChainData &cdata)
+  void ImgsCropAction::apply(oatpp::Object<DTO::PredictBody> &model_out,
+                             ChainData &cdata)
   {
-    std::vector<APIData> vad = model_out.getv("predictions");
-    APIData input_ad = model_out.getobj("input");
-    std::vector<std::pair<int, int>> imgs_size
-        = input_ad.get("imgs_size").get<std::vector<std::pair<int, int>>>();
+    auto predictions = model_out->predictions;
+    ChainInputData &input_data = model_out->_chain_input;
+    std::vector<std::pair<int, int>> imgs_size = input_data._img_sizes;
     std::vector<std::string> bbox_ids;
 
-    std::vector<cv::Mat> imgs;
+    std::vector<cv::Mat> imgs = input_data._imgs;
     std::vector<cv::Mat> cropped_imgs;
+    std::vector<cv::Mat> masks;
 #ifdef USE_CUDA_CV
-    std::vector<cv::cuda::GpuMat> cuda_imgs;
+    std::vector<cv::cuda::GpuMat> cuda_imgs = input_data._cuda_imgs;
     std::vector<cv::cuda::GpuMat> cropped_cuda_imgs;
-
-    if (input_ad.has("cuda_imgs"))
-      {
-        cuda_imgs
-            = input_ad.get("cuda_imgs").get<std::vector<cv::cuda::GpuMat>>();
-      }
-    else
+    std::vector<cv::cuda::GpuMat> cuda_masks;
 #endif
-      {
-        imgs = input_ad.get("imgs").get<std::vector<cv::Mat>>();
-      }
 
     // check for action parameters
     double bratio = _params->padding_ratio;
     bool save_crops = _params->save_crops;
+    bool gen_mask = _params->generate_mask;
 
     std::string save_path = _params->save_path;
     if (!save_path.empty())
@@ -74,12 +68,11 @@ namespace dd
     int fixed_width = _params->fixed_width;
     int fixed_height = _params->fixed_height;
 
-    std::vector<APIData> cvad;
-
     // iterate image batch
-    for (size_t i = 0; i < vad.size(); i++)
+    for (size_t i = 0; i < predictions->size(); i++)
       {
-        std::string uri = vad.at(i).get("uri").get<std::string>();
+        auto pred = predictions->at(i);
+        std::string uri = pred->uri;
 
         int im_cols, im_rows;
 #ifdef USE_CUDA_CV
@@ -97,21 +90,18 @@ namespace dd
         int orig_cols = imgs_size.at(i).second;
         int orig_rows = imgs_size.at(i).first;
 
-        std::vector<APIData> ad_cls = vad.at(i).getv("classes");
-        std::vector<APIData> cad_cls;
-
         // iterate bboxes per image
-        for (size_t j = 0; j < ad_cls.size(); j++)
+        for (size_t j = 0; j < pred->classes->size(); j++)
           {
-            APIData bbox = ad_cls.at(j).getobj("bbox");
-            if (bbox.empty())
+            auto bbox = pred->classes->at(j)->bbox;
+            if (bbox == nullptr)
               throw ActionBadParamException(
                   "crop action cannot find bbox object for uri " + uri);
 
-            double xmin = bbox.get("xmin").get<double>() / orig_cols * im_cols;
-            double ymin = bbox.get("ymin").get<double>() / orig_rows * im_rows;
-            double xmax = bbox.get("xmax").get<double>() / orig_cols * im_cols;
-            double ymax = bbox.get("ymax").get<double>() / orig_rows * im_rows;
+            double xmin = bbox->xmin / orig_cols * im_cols;
+            double ymin = bbox->ymin / orig_rows * im_rows;
+            double xmax = bbox->xmax / orig_cols * im_cols;
+            double ymax = bbox->ymax / orig_rows * im_rows;
 
             double deltax = bratio * (xmax - xmin);
             double deltay = bratio * (ymax - ymin);
@@ -185,11 +175,25 @@ namespace dd
               }
 
             cv::Rect roi(cxmin, cymin, cxmax - cxmin, cymax - cymin);
-
+            // roi corresponding to the bbox inside the crop
+            cv::Rect mask_roi(bbox->xmin - cxmin, bbox->ymin - cymin,
+                              bbox->xmax - bbox->xmin,
+                              bbox->ymax - bbox->ymin);
 #ifdef USE_CUDA_CV
             if (!cuda_imgs.empty())
               {
                 cv::cuda::GpuMat cropped_img = cuda_imgs.at(i)(roi).clone();
+
+                // Generate mask for diffusion
+                if (gen_mask)
+                  {
+                    cv::cuda::GpuMat cuda_mask(cropped_img.rows,
+                                               cropped_img.cols, CV_8UC1,
+                                               cv::Scalar(0));
+                    // XXX: Use streams for non-blocking call
+                    cuda_mask(mask_roi).setTo(255);
+                    cuda_masks.push_back(cuda_mask);
+                  }
 
                 // save crops if requested
                 if (save_crops)
@@ -209,6 +213,15 @@ namespace dd
               {
                 cv::Mat cropped_img = imgs.at(i)(roi).clone();
 
+                // Generate mask for diffusion models
+                if (gen_mask)
+                  {
+                    cv::Mat mask(cropped_img.rows, cropped_img.cols, CV_8UC1,
+                                 cv::Scalar(0));
+                    cv::rectangle(mask, mask_roi, 255, cv::FILLED);
+                    masks.push_back(mask);
+                  }
+
                 // save crops if requested
                 if (save_crops)
                   {
@@ -223,40 +236,38 @@ namespace dd
             // adding bbox id
             std::string bbox_id = genid(uri, "bbox" + std::to_string(j));
             bbox_ids.push_back(bbox_id);
-            ad_cls.at(j).add("class_id", bbox_id);
-            cad_cls.push_back(ad_cls.at(j));
+            pred->classes->at(j)->class_id = bbox_id;
           }
-        APIData ccls;
-        ccls.add("uri", uri);
-        if (vad.at(i).has("index_uri"))
-          ccls.add("index_uri", vad.at(i).get("index_uri").get<std::string>());
-        ccls.add("classes", cad_cls);
-        cvad.push_back(ccls);
       }
     // store crops into action output store
     APIData action_out;
-    action_out.add("data_raw_img", cropped_imgs);
 #ifdef USE_CUDA_CV
     if (!cropped_cuda_imgs.empty())
-      action_out.add("data_cuda_img", cropped_cuda_imgs);
+      {
+        action_out.add("data_cuda_img", cropped_cuda_imgs);
+        if (gen_mask)
+          action_out.add("cuda_mask", cuda_masks);
+      }
+    else
 #endif
+      {
+        action_out.add("data_raw_img", cropped_imgs);
+        if (gen_mask)
+          action_out.add("mask", masks);
+      }
     action_out.add("cids", bbox_ids);
     cdata.add_action_data(_action_id, action_out);
-
-    // updated model data with chain ids
-    model_out.add("predictions", cvad);
   }
 
-  void ImgsRotateAction::apply(APIData &model_out, ChainData &cdata)
+  void ImgsRotateAction::apply(oatpp::Object<DTO::PredictBody> &model_out,
+                               ChainData &cdata)
   {
     // get label
-    std::vector<APIData> vad = model_out.getv("predictions");
-    std::vector<cv::Mat> imgs
-        = model_out.getobj("input").get("imgs").get<std::vector<cv::Mat>>();
-    std::vector<std::pair<int, int>> imgs_size
-        = model_out.getobj("input")
-              .get("imgs_size")
-              .get<std::vector<std::pair<int, int>>>();
+    auto predictions = model_out->predictions;
+    ChainInputData &input_data = model_out->_chain_input;
+    std::vector<std::pair<int, int>> imgs_size = input_data._img_sizes;
+    // TODO does not support CUDA
+    std::vector<cv::Mat> imgs = input_data._imgs;
     std::vector<cv::Mat> rimgs;
     std::vector<std::string> uris;
 
@@ -268,18 +279,19 @@ namespace dd
     if (!save_path.empty())
       save_path += "/";
 
-    for (size_t i = 0; i < vad.size(); i++) // iterate predictions
+    for (size_t i = 0; i < predictions->size(); i++) // iterate predictions
       {
-        std::string uri = vad.at(i).get("uri").get<std::string>();
+        auto pred = predictions->at(i);
+        std::string uri = pred->uri;
+
         cv::Mat img = imgs.at(i);
-        std::vector<APIData> ad_cls = vad.at(i).getv("classes");
-        std::vector<APIData> cad_cls;
 
         // rotate and make image available to next service
-        if (ad_cls.size() > 0)
+        if (pred->classes->size() > 0)
           {
             uris.push_back(uri);
-            std::string cat1 = ad_cls.at(0).get("cat").get<std::string>();
+            // TODO check that it cannot be null
+            std::string cat1 = pred->classes->at(0)->cat;
             cv::Mat rimg, timg;
             if (cat1 == "0") // all tests in absolute orientation
               {
@@ -326,6 +338,179 @@ namespace dd
     cdata.add_action_data(_action_id, action_out);
   }
 
+  void make_even(cv::Mat &mat, int &width, int &height)
+  {
+    if (width % 2 != 0)
+      width -= 1;
+    if (height % 2 != 0)
+      height -= 1;
+
+    if (width != mat.cols || height != mat.rows)
+      {
+        cv::Rect roi{ 0, 0, width, height };
+        mat = mat(roi);
+      }
+  }
+
+  void
+  ImgsCropRecomposeAction::apply(oatpp::Object<DTO::PredictBody> &model_out,
+                                 ChainData &cdata)
+  {
+    oatpp::Object<DTO::PredictBody> first_model = cdata.get_model_data("0");
+    ChainInputData &input_data = first_model->_chain_input;
+    // image
+    std::vector<cv::Mat> imgs = input_data._imgs;
+#ifdef USE_CUDA_CV
+    std::vector<cv::cuda::GpuMat> cuda_imgs = input_data._cuda_imgs;
+    std::vector<cv::cuda::GpuMat> cropped_cuda_imgs;
+#endif
+    std::vector<std::pair<int, int>> imgs_size = input_data._img_sizes;
+
+    // bbox
+    auto predictions = first_model->predictions;
+
+    // generated images
+    // XXX: Images are always read from RAM, never from CUDA memory.
+    // This may change in the future
+    std::map<std::string, cv::Mat> gen_imgs;
+    for (size_t i = 0; i < model_out->predictions->size(); ++i)
+      {
+        auto images = model_out->predictions->at(i)->images;
+        if (images->size() == 0)
+          throw ActionBadParamException(
+              "Recompose requires output.image = true in previous model");
+        gen_imgs.insert(
+            { *model_out->predictions->at(i)->uri, images->at(0)->get_img() });
+      }
+
+    std::vector<cv::Mat> rimgs;
+    std::vector<std::string> uris;
+
+    bool save_img = _params->save_img;
+    std::string save_path = _params->save_path;
+    if (!save_path.empty())
+      save_path += "/";
+
+    auto pred_body = DTO::PredictBody::createShared();
+
+    // need: original image, bbox coordinates, new image
+    for (size_t i = 0; i < predictions->size(); i++)
+      {
+        auto pred = predictions->at(i);
+        std::string uri = pred->uri;
+        uris.push_back(uri);
+
+        cv::Mat input_img;
+        int input_width, input_height;
+        cv::Mat rimg;
+#ifdef USE_CUDA_CV
+        cv::cuda::GpuMat cuda_input_img;
+        cv::cuda::GpuMat cuda_rimg;
+        if (!cuda_imgs.empty())
+          {
+            cuda_input_img = cuda_imgs.at(i);
+            input_width = cuda_input_img.cols;
+            input_height = cuda_input_img.rows;
+            cuda_rimg = cuda_input_img.clone();
+          }
+        else
+#endif
+          {
+            input_img = imgs.at(i);
+            input_width = input_img.cols;
+            input_height = input_img.rows;
+            rimg = input_img.clone();
+          }
+        int orig_width = imgs_size.at(i).second;
+        int orig_height = imgs_size.at(i).first;
+
+        for (size_t j = 0; j < pred->classes->size(); j++)
+          {
+            auto bbox = pred->classes->at(j)->bbox;
+            std::string cls_id = pred->classes->at(j)->class_id;
+
+            cv::Mat gen_img = gen_imgs.at(cls_id);
+            int gen_width = gen_img.cols;
+            int gen_height = gen_img.rows;
+
+            // support odd width & height
+            make_even(gen_img, gen_width, gen_height);
+
+            if (gen_width > input_width || gen_height > input_height)
+              {
+                throw ActionBadParamException(
+                    "Recomposing image is impossible, crop is too big: "
+                    + std::to_string(gen_width) + ","
+                    + std::to_string(gen_height) + "/"
+                    + std::to_string(orig_width) + ","
+                    + std::to_string(orig_height));
+              }
+
+            double xmin = bbox->xmin / orig_width * input_width;
+            double ymin = bbox->ymin / orig_height * input_height;
+            double xmax = bbox->xmax / orig_width * input_width;
+            double ymax = bbox->ymax / orig_height * input_height;
+
+            int cx = static_cast<int>((xmin + xmax) / 2);
+            int cy = static_cast<int>((ymin + ymax) / 2);
+            cx = std::min(std::max(cx, gen_width / 2),
+                          input_width - gen_width / 2);
+            cy = std::min(std::max(cy, gen_height / 2),
+                          input_height - gen_height / 2);
+
+            cv::Rect roi{ cx - gen_width / 2, cy - gen_height / 2, gen_width,
+                          gen_height };
+#ifdef USE_CUDA_CV
+            if (cuda_rimg.cols != 0)
+              {
+                cv::cuda::GpuMat cuda_gen_img;
+                cuda_gen_img.upload(gen_img);
+                cuda_gen_img.copyTo(cuda_rimg(roi));
+              }
+            else
+#endif
+              {
+                gen_img.copyTo(rimg(roi));
+              }
+          }
+
+        rimgs.push_back(rimg);
+
+        auto action_pred = DTO::Prediction::createShared();
+        action_pred->uri = uri.c_str();
+        action_pred->images = oatpp::Vector<DTO::DTOImage>::createShared();
+#ifdef USE_CUDA_CV
+        if (cuda_rimg.cols != 0)
+          {
+            action_pred->images->push_back({ cuda_rimg });
+          }
+        else
+#endif
+          {
+            action_pred->images->push_back({ rimg });
+          }
+        pred_body->predictions->push_back(action_pred);
+
+        // save image if requested
+        if (save_img)
+          {
+            std::string puri = dd_utils::split(uri, '/').back();
+#ifdef USE_CUDA_CV
+            if (cuda_rimg.cols != 0)
+              cuda_rimg.download(rimg);
+#endif
+            cv::imwrite(save_path + "recompose_" + puri + ".png", rimg);
+          }
+      }
+
+    // Output: new image -> only works in "image" output mode
+    APIData action_out;
+    action_out.add("data_raw_img", rimgs);
+    action_out.add("cids", uris);
+    action_out.add("output", pred_body);
+    cdata.add_action_data(_action_id, action_out);
+  }
+
   cv::Scalar bbox_palette[]
       = { { 82, 188, 227 }, { 196, 110, 49 }, { 39, 54, 227 },
           { 68, 227, 81 },  { 77, 157, 255 }, { 255, 112, 207 },
@@ -333,17 +518,15 @@ namespace dd
           { 28, 77, 120 } };
   size_t bbox_palette_size = 10;
 
-  void ImgsDrawBBoxAction::apply(APIData &model_out, ChainData &cdata)
+  void ImgsDrawBBoxAction::apply(oatpp::Object<DTO::PredictBody> &model_out,
+                                 ChainData &cdata)
   {
-    std::vector<APIData> vad = model_out.getv("predictions");
-    APIData input_ad = model_out.getobj("input");
+    auto predictions = model_out->predictions;
+    ChainInputData &input_data = model_out->_chain_input;
+    std::vector<std::pair<int, int>> imgs_size = input_data._img_sizes;
 
-    std::vector<cv::Mat> imgs
-        = model_out.getobj("input").get("imgs").get<std::vector<cv::Mat>>();
-    std::vector<std::pair<int, int>> imgs_size
-        = model_out.getobj("input")
-              .get("imgs_size")
-              .get<std::vector<std::pair<int, int>>>();
+    // TODO does not support CUDA
+    std::vector<cv::Mat> imgs = input_data._imgs;
     std::vector<cv::Mat> rimgs;
     std::vector<std::string> uris;
     auto pred_body = DTO::PredictBody::createShared();
@@ -355,9 +538,10 @@ namespace dd
     if (!save_path.empty())
       save_path += "/";
 
-    for (size_t i = 0; i < vad.size(); i++)
+    for (size_t i = 0; i < predictions->size(); i++)
       {
-        std::string uri = vad.at(i).get("uri").get<std::string>();
+        auto pred = predictions->at(i);
+        std::string uri = pred->uri;
         uris.push_back(uri);
 
         int im_cols = imgs.at(i).cols;
@@ -365,22 +549,21 @@ namespace dd
         int orig_cols = imgs_size.at(i).second;
         int orig_rows = imgs_size.at(i).first;
 
-        std::vector<APIData> ad_cls = vad.at(i).getv("classes");
         cv::Mat rimg = imgs.at(i).clone();
 
         // iterate bboxes per image
-        for (size_t j = 0; j < ad_cls.size(); j++)
+        for (size_t j = 0; j < pred->classes->size(); j++)
           {
-            APIData bbox = ad_cls.at(j).getobj("bbox");
-            std::string cat = ad_cls.at(j).get("cat").get<std::string>();
-            if (bbox.empty())
+            auto bbox = pred->classes->at(j)->bbox;
+            std::string cat = pred->classes->at(j)->cat;
+            if (bbox == nullptr)
               throw ActionBadParamException(
                   "draw action cannot find bbox object for uri " + uri);
 
-            double xmin = bbox.get("xmin").get<double>() / orig_cols * im_cols;
-            double ymin = bbox.get("ymin").get<double>() / orig_rows * im_rows;
-            double xmax = bbox.get("xmax").get<double>() / orig_cols * im_cols;
-            double ymax = bbox.get("ymax").get<double>() / orig_rows * im_rows;
+            double xmin = bbox->xmin / orig_cols * im_cols;
+            double ymin = bbox->ymin / orig_rows * im_rows;
+            double xmax = bbox->xmax / orig_cols * im_cols;
+            double ymax = bbox->ymax / orig_rows * im_rows;
 
             // draw bbox
             cv::Point pt1{ int(xmin), int(ymin) };
@@ -398,7 +581,7 @@ namespace dd
             if (_params->write_cat && _params->write_prob)
               label += " - ";
             if (_params->write_prob)
-              label += std::to_string(ad_cls.at(j).get("prob").get<double>());
+              label += std::to_string(pred->classes->at(j)->prob);
 
             // font size relatively to base opencv font size
             float font_size = 2;
@@ -449,7 +632,8 @@ namespace dd
     cdata.add_action_data(_action_id, action_out);
   }
 
-  void ClassFilter::apply(APIData &model_out, ChainData &cdata)
+  void ClassFilter::apply(oatpp::Object<DTO::PredictBody> &model_out,
+                          ChainData &cdata)
   {
     if (_params->classes == nullptr)
       {
@@ -458,39 +642,31 @@ namespace dd
       }
     std::unordered_set<std::string> on_classes_us;
     for (auto s : *_params->classes)
-      on_classes_us.insert(s);
+      on_classes_us.insert(*s);
     std::unordered_set<std::string>::const_iterator usit;
 
-    std::vector<APIData> vad = model_out.getv("predictions");
-    std::vector<APIData> cvad;
+    auto predictions = model_out->predictions;
 
-    for (size_t i = 0; i < vad.size(); i++)
+    for (size_t i = 0; i < predictions->size(); i++)
       {
-        std::vector<APIData> ad_cls = vad.at(i).getv("classes");
-        std::vector<APIData> cad_cls;
+        oatpp::Object<DTO::Prediction> pred = predictions->at(i);
+        auto new_classes
+            = oatpp::Vector<oatpp::Object<DTO::PredictClass>>::createShared();
 
-        for (size_t j = 0; j < ad_cls.size(); j++)
+        for (size_t j = 0; j < pred->classes->size(); j++)
           {
-            std::string cat = ad_cls.at(j).get("cat").get<std::string>();
+            std::string cat = pred->classes->at(j)->cat;
             if ((usit = on_classes_us.find(cat)) != on_classes_us.end())
               {
-                cad_cls.push_back(ad_cls.at(j));
+                new_classes->push_back(pred->classes->at(j));
               }
           }
-        APIData ccls;
-        ccls.add("classes", cad_cls);
-        if (vad.at(i).has("index_uri"))
-          ccls.add("index_uri", vad.at(i).get("index_uri").get<std::string>());
-        ccls.add("uri", vad.at(i).get("uri").get<std::string>());
-        cvad.push_back(ccls);
+        pred->classes = new_classes;
       }
 
     // empty action data
     cdata.add_action_data(_action_id, APIData());
     // actions_data.push_back(APIData());
-
-    // updated model data
-    model_out.add("predictions", cvad);
   }
 
   void *ChainActionFactory::add_chain_action(const std::string &action_name,
@@ -509,7 +685,8 @@ namespace dd
   }
 
   void ChainActionFactory::apply_action(
-      const std::string &action_type, APIData &model_out, ChainData &cdata,
+      const std::string &action_type,
+      oatpp::Object<DTO::PredictBody> &model_out, ChainData &cdata,
       const std::shared_ptr<spdlog::logger> &chain_logger)
   {
     if (_call_dto->id == nullptr)
@@ -533,6 +710,7 @@ namespace dd
 
   CHAIN_ACTION("crop", ImgsCropAction)
   CHAIN_ACTION("rotate", ImgsRotateAction)
+  CHAIN_ACTION("recompose", ImgsCropRecomposeAction)
   CHAIN_ACTION("draw_bbox", ImgsDrawBBoxAction)
   CHAIN_ACTION("filter", ClassFilter)
 #ifdef USE_DLIB

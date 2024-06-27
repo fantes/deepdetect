@@ -126,7 +126,7 @@ namespace dd
                            torch::Tensor perturb, float eps, float delta,
                            float wd)
   {
-    std::vector<long int> expand_size(p.sizes().size(), 1);
+    std::vector<int64_t> expand_size(p.sizes().size(), 1);
     expand_size[0] = -1;
 
     std::vector<std::function<torch::Tensor(torch::Tensor)>> view_funcs{
@@ -186,8 +186,7 @@ namespace dd
 
             TORCH_CHECK(!grad.is_sparse(),
                         "Ranger does not support sparse gradients");
-            auto param_state
-                = state_.find(c10::guts::to_string(p.unsafeGetTensorImpl()));
+            auto param_state = state_.find(p.unsafeGetTensorImpl());
             auto &options = static_cast<RangerOptions &>(group.options());
 
             // State initialization
@@ -204,15 +203,14 @@ namespace dd
                 state->slow_buffer(
                     torch::empty_like(p, torch::MemoryFormat::Preserve));
                 state->slow_buffer().copy_(p.data());
-                state_[c10::guts::to_string(p.unsafeGetTensorImpl())]
-                    = std::move(state);
+                state_[p.unsafeGetTensorImpl()] = std::move(state);
                 if (options.swa())
                   state->swa_buffer(torch::zeros_like(
                       p.data(), torch::MemoryFormat::Preserve));
               }
 
             auto &state = static_cast<RangerParamState &>(
-                *state_[c10::guts::to_string(p.unsafeGetTensorImpl())]);
+                *state_[p.unsafeGetTensorImpl()]);
             auto &exp_avg = state.exp_avg();
             auto &exp_avg_sq = state.exp_avg_sq();
 
@@ -230,8 +228,8 @@ namespace dd
             if (options.gradient_centralization())
               {
 
-                std::vector<long int> dim;
-                for (long int i = 1; i < grad.dim(); ++i)
+                std::vector<int64_t> dim;
+                for (int64_t i = 1; i < grad.dim(); ++i)
                   dim.push_back(i);
                 grad.add_(-grad.mean(torch::IntArrayRef(dim), true));
               }
@@ -350,7 +348,7 @@ namespace dd
         for (auto &p : group.params())
           {
             auto &state = static_cast<RangerParamState &>(
-                *state_[c10::guts::to_string(p.unsafeGetTensorImpl())]);
+                *state_[p.unsafeGetTensorImpl()]);
             auto &swa_buf = state.swa_buffer();
 
             auto tmp = torch::empty_like(p.data());

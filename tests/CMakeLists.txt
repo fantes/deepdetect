@@ -1,5 +1,7 @@
 include_directories(${COMMON_INCLUDE_DIRS})
 link_directories(${COMMON_LINK_DIRS})
+link_directories("/opt/homebrew/lib/")
+link_directories("/usr/local/lib") # for gtest
 
 find_package(GTest REQUIRED)
 include_directories(${GTEST_INCLUDE_DIRS})
@@ -90,7 +92,7 @@ function (DOWNLOAD_FILES _BASEURL _DEST)
   endforeach()
 endfunction()
 
-find_package(PythonInterp 2.7 REQUIRED)
+find_package(PythonInterp 3 REQUIRED)
 
 REGISTER_TEST(ut_common ut-common.cc)
 
@@ -387,6 +389,13 @@ if (USE_TENSORRT)
     "examples/trt"
     "cyclegan_resnet_attn_onnx_trt.tar.gz"
     "cyclegan_resnet_attn_onnx_trt"
+  )
+  DOWNLOAD_DATASET(
+    "ONNX Consistency model"
+    "https://deepdetect.com/dd/examples/tensorrt/noglasses2glasses_cm_128.tar.gz"
+    "examples/trt"
+    "noglasses2glasses_cm_128.tar.gz"
+    "noglasses2glasses_cm_128"
   )
 
   if(USE_JSON_API)

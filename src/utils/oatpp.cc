@@ -23,6 +23,7 @@
 #include <iostream>
 
 #include "dto/ddtypes.hpp"
+#include "utils/utils.hpp"
 
 namespace dd
 {
@@ -34,8 +35,12 @@ namespace dd
       std::shared_ptr<oatpp::parser::json::mapping::ObjectMapper> object_mapper
           = oatpp::parser::json::mapping::ObjectMapper::createShared();
       auto deser = object_mapper->getDeserializer();
+      deser->setDeserializerMethod(DTO::DTOApiData::Class::CLASS_ID,
+                                   DTO::apiDataDeserialize);
       deser->setDeserializerMethod(DTO::GpuIds::Class::CLASS_ID,
                                    DTO::gpuIdsDeserialize);
+      deser->setDeserializerMethod(DTO::DTOImage::Class::CLASS_ID,
+                                   DTO::imageDeserialize);
       deser->setDeserializerMethod(DTO::DTOVector<double>::Class::CLASS_ID,
                                    DTO::vectorDeserialize<double>);
       deser->setDeserializerMethod(DTO::DTOVector<uint8_t>::Class::CLASS_ID,
@@ -43,8 +48,12 @@ namespace dd
       deser->setDeserializerMethod(DTO::DTOVector<bool>::Class::CLASS_ID,
                                    DTO::vectorDeserialize<bool>);
       auto ser = object_mapper->getSerializer();
+      ser->setSerializerMethod(DTO::DTOApiData::Class::CLASS_ID,
+                               DTO::apiDataSerialize);
       ser->setSerializerMethod(DTO::GpuIds::Class::CLASS_ID,
                                DTO::gpuIdsSerialize);
+      ser->setSerializerMethod(DTO::DTOImage::Class::CLASS_ID,
+                               DTO::imageSerialize);
       ser->setSerializerMethod(DTO::DTOVector<double>::Class::CLASS_ID,
                                DTO::vectorSerialize<double>);
       ser->setSerializerMethod(DTO::DTOVector<uint8_t>::Class::CLASS_ID,
@@ -172,6 +181,28 @@ namespace dd
               jval.PushBack(JVal(bool(vec->at(i))), jdoc.GetAllocator());
             }
         }
+      else if (polymorph.getValueType() == DTO::DTOApiData::Class::getType())
+        {
+          auto dto_ad = polymorph.cast<DTO::DTOApiData>();
+          jval = JVal(rapidjson::kObjectType);
+          dto_ad->toJVal(jdoc, jval);
+        }
+      else if (polymorph.getValueType() == DTO::GpuIds::Class::getType())
+        {
+          auto dto_gpuid = polymorph.cast<DTO::GpuIds>();
+          jval = JVal(rapidjson::kArrayType);
+          for (size_t i = 0; i < dto_gpuid->_ids.size(); ++i)
+            {
+              jval.PushBack(dto_gpuid->_ids[i], jdoc.GetAllocator());
+            }
+        }
+      else if (polymorph.getValueType() == DTO::DTOImage::Class::getType())
+        {
+          auto dto_img = polymorph.cast<DTO::DTOImage>();
+          std::string img_str
+              = cv_utils::image_to_base64(dto_img->get_img(), dto_img->_ext);
+          jval.SetString(img_str.c_str(), jdoc.GetAllocator());
+        }
       else if (polymorph.getValueType()->classId.id
                    == oatpp::data::mapping::type::__class::AbstractVector::
                           CLASS_ID.id
@@ -263,6 +294,14 @@ namespace dd
           throw std::runtime_error("dtoToJVal: \"" + type_name
                                    + "\": type not recognised");
         }
+    }
+
+    std::string dtoToJSONString(const oatpp::Void &polymorph, bool ignore_null)
+    {
+      JDoc jd;
+      jd.SetObject();
+      dtoToJDoc(polymorph, jd, ignore_null);
+      return dd_utils::jrender(jd);
     }
   }
 }

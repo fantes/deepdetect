@@ -22,13 +22,15 @@
 #ifndef MLLIBSTRATEGY_H
 #define MLLIBSTRATEGY_H
 
+#include <atomic>
+#include <exception>
+#include <mutex>
+
 #include "apidata.h"
 #include "service_stats.h"
 #include "utils/fileops.hpp"
 #include "dd_spdlog.h"
-#include <atomic>
-#include <exception>
-#include <mutex>
+#include "dto/predict_out.hpp"
 
 namespace dd
 {
@@ -168,11 +170,10 @@ namespace dd
 
     /**
      * \brief predicts from model
-     * @param ad root data object
-     * @param out output data object (e.g. predictions, ...)
-     * @return 0 if OK, 1 otherwise
+     * @param ad root input call object
+     * @return result DTO containing predictions
      */
-    int predict(const APIData &ad, APIData &out);
+    oatpp::Object<DTO::PredictBody> predict(const APIData &ad_in);
 
     /**
      * \brief ML library status
@@ -406,8 +407,10 @@ namespace dd
 
     std::shared_ptr<spdlog::logger> _logger; /**< mllib logger. */
 
-    long int _model_flops = 0;    /**< model flops. */
-    long int _model_params = 0;   /**< number of parameters in the model. */
+    long int _model_flops = 0;  /**< model flops. */
+    long int _model_params = 0; /**< number of parameters in the model. */
+    long int _model_frozen_params
+        = 0; /**< number of frozen parameters in the model. */
     long int _mem_used_train = 0; /**< amount  of memory used. */
     long int _mem_used_test = 0;  /**< amount  of memory used. */
 

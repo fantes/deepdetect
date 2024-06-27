@@ -27,8 +27,8 @@
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunused-parameter"
 #include <torch/torch.h>
-#pragma GCC diagnostic pop
 #include <torch/ordered_dict.h>
+#pragma GCC diagnostic pop
 
 namespace dd
 {
@@ -238,7 +238,7 @@ namespace dd
 
     bool _allocation_done = false;
 
-    long int _autoencoder_timesteps = -1;
+    int64_t _autoencoder_timesteps = -1;
     /**< this var stores timesteps of an lstm autoencoder, read from lstm
      * layers and given to tile/repeat layer, in order not to have to put it in
      * prototxt */

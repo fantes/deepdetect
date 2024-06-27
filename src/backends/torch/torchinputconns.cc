@@ -25,6 +25,20 @@
 #include "utils/utils.hpp"
 #include "utils/oatpp.hpp"
 
+// Macro to catch an exception thrown in an omp parallel block
+#define CATCH_PARALLEL_EXCEPTION(EXPR, EPTR)                                  \
+  try                                                                         \
+    {                                                                         \
+      EXPR;                                                                   \
+    }                                                                         \
+  catch (...)                                                                 \
+    {                                                                         \
+      _Pragma("omp critical")                                                 \
+      {                                                                       \
+        EPTR = std::current_exception();                                      \
+      }                                                                       \
+    }
+
 namespace dd
 {
 
@@ -290,8 +304,7 @@ namespace dd
           {
             _imgs_size.insert(std::pair<std::string, std::pair<int, int>>(
                 this->_ids.at(i), this->_images_size.at(i)));
-            _dataset.add_batch({ _dataset.image_to_tensor(this->_images[i],
-                                                          _height, _width) });
+            _dataset.add_batch({ _dataset.image_to_tensor(this->_images[i]) });
           }
       }
     else // if (!_train)
@@ -307,6 +320,7 @@ namespace dd
             = _db
               && TorchInputInterface::has_to_create_db(data_vec, _test_split);
         bool shouldLoad = !_db || createDb;
+        std::exception_ptr eptr;
 
         if (shouldLoad)
           {
@@ -358,16 +372,25 @@ namespace dd
                       has_test_data = true;
                       break;
                     }
-                if (_test_split > 0.0 && !has_test_data)
+                if (_test_split > 0.0)
                   {
+                    if (has_test_data)
+                      throw InputConnectorBadParamException(
+                          "User specified both a test split "
+                          + std::to_string(_test_split) + " and a test set");
                     tests_lfiles.resize(1);
                     split_dataset<int>(lfiles, tests_lfiles[0]);
                   }
 
-                // Read data
+                  // Read data
+#pragma omp parallel for ordered schedule(static, 1)
                 for (const std::pair<std::string, int> &lfile : lfiles)
-                  _dataset.add_image_file(lfile.first, lfile.second, _height,
-                                          _width);
+                  CATCH_PARALLEL_EXCEPTION(
+                      _dataset.add_image_file(lfile.first, lfile.second),
+                      eptr);
+
+                dd_utils::rethrow_exception<InputConnectorBadParamException>(
+                    eptr, this->_logger);
 
                 if (!_db)
                   // in case of db, test sets are already allocated in
@@ -397,10 +420,15 @@ namespace dd
                   }
 
                 for (size_t i = 0; i < tests_lfiles.size(); ++i)
+#pragma omp parallel for ordered schedule(static, 1)
                   for (const std::pair<std::string, int> &lfile :
                        tests_lfiles[i])
-                    _test_datasets[i].add_image_file(lfile.first, lfile.second,
-                                                     _height, _width);
+                    CATCH_PARALLEL_EXCEPTION(_test_datasets[i].add_image_file(
+                                                 lfile.first, lfile.second),
+                                             eptr);
+
+                dd_utils::rethrow_exception<InputConnectorBadParamException>(
+                    eptr, this->_logger);
 
                 // Write corresp file
                 std::ofstream correspf(_model_repo + "/" + _correspname,
@@ -438,18 +466,24 @@ namespace dd
                       has_test_data = true;
                       break;
                     }
-                if (_test_split > 0.0 && !has_test_data)
+                if (_test_split > 0.0)
                   {
+                    if (has_test_data)
+                      throw InputConnectorBadParamException(
+                          "User specified both a test split "
+                          + std::to_string(_test_split) + " and a test set");
                     tests_lfiles.resize(1);
                     split_dataset<std::string>(lfiles, tests_lfiles[0]);
                   }
 
 #pragma omp parallel for ordered schedule(static, 1)
                 for (const std::pair<std::string, std::string> &lfile : lfiles)
-                  {
-                    _dataset.add_image_bbox_file(lfile.first, lfile.second,
-                                                 _height, _width);
-                  }
+                  CATCH_PARALLEL_EXCEPTION(
+                      _dataset.add_image_bbox_file(lfile.first, lfile.second),
+                      eptr);
+
+                dd_utils::rethrow_exception<InputConnectorBadParamException>(
+                    eptr, this->_logger);
 
                 // in case of db, alloc of test sets already done in
                 // has_to_create_db
@@ -462,8 +496,13 @@ namespace dd
 #pragma omp parallel for ordered schedule(static, 1)
                   for (const std::pair<std::string, std::string> &lfile :
                        tests_lfiles[i])
-                    _test_datasets[i].add_image_bbox_file(
-                        lfile.first, lfile.second, _height, _width);
+                    CATCH_PARALLEL_EXCEPTION(
+                        _test_datasets[i].add_image_bbox_file(lfile.first,
+                                                              lfile.second),
+                        eptr);
+
+                dd_utils::rethrow_exception<InputConnectorBadParamException>(
+                    eptr, this->_logger);
               }
             else if (_segmentation) // expects a file list of image filepath
                                     // and target image filepath
@@ -490,17 +529,24 @@ namespace dd
                       has_test_data = true;
                       break;
                     }
-                if (_test_split > 0.0 && !has_test_data)
+                if (_test_split > 0.0)
                   {
+                    if (has_test_data)
+                      throw InputConnectorBadParamException(
+                          "User specified both a test split "
+                          + std::to_string(_test_split) + " and a test set");
                     tests_lfiles.resize(1);
                     split_dataset<std::string>(lfiles, tests_lfiles[0]);
                   }
 
+#pragma omp parallel for ordered schedule(static, 1)
                 for (const std::pair<std::string, std::string> &lfile : lfiles)
-                  {
-                    _dataset.add_image_image_file(lfile.first, lfile.second,
-                                                  _height, _width);
-                  }
+                  CATCH_PARALLEL_EXCEPTION(
+                      _dataset.add_image_image_file(lfile.first, lfile.second),
+                      eptr);
+
+                dd_utils::rethrow_exception<InputConnectorBadParamException>(
+                    eptr, this->_logger);
 
                 // in case of db, alloc of test sets already done in
                 // has_to_create_db
@@ -510,10 +556,16 @@ namespace dd
                   }
 
                 for (size_t i = 0; i < tests_lfiles.size(); ++i)
+#pragma omp parallel for ordered schedule(static, 1)
                   for (const std::pair<std::string, std::string> &lfile :
                        tests_lfiles[i])
-                    _test_datasets[i].add_image_image_file(
-                        lfile.first, lfile.second, _height, _width);
+                    CATCH_PARALLEL_EXCEPTION(
+                        _test_datasets[i].add_image_image_file(lfile.first,
+                                                               lfile.second),
+                        eptr);
+
+                dd_utils::rethrow_exception<InputConnectorBadParamException>(
+                    eptr, this->_logger);
               }
             else if (_ctc)
               {
@@ -539,8 +591,12 @@ namespace dd
                       has_test_data = true;
                       break;
                     }
-                if (_test_split > 0.0 && !has_test_data)
+                if (_test_split > 0.0)
                   {
+                    if (has_test_data)
+                      throw InputConnectorBadParamException(
+                          "User specified both a test split "
+                          + std::to_string(_test_split) + " and a test set");
                     tests_lfiles.resize(1);
                     split_dataset<std::string>(lfiles, tests_lfiles[0]);
                   }
@@ -558,12 +614,15 @@ namespace dd
                 // ctc blank character
                 alphabet[0] = 0;
 
+#pragma omp parallel for ordered schedule(static, 1)
                 for (const std::pair<std::string, std::string> &lfile : lfiles)
-                  {
-                    _dataset.add_image_text_file(lfile.first, lfile.second,
-                                                 _height, _width, alphabet,
-                                                 max_ocr_length);
-                  }
+                  CATCH_PARALLEL_EXCEPTION(
+                      _dataset.add_image_text_file(lfile.first, lfile.second,
+                                                   alphabet, max_ocr_length),
+                      eptr);
+
+                dd_utils::rethrow_exception<InputConnectorBadParamException>(
+                    eptr, this->_logger);
 
                 // in case of db, alloc of test sets already done in
                 // has_to_create_db
@@ -573,11 +632,17 @@ namespace dd
                   }
 
                 for (size_t i = 0; i < tests_lfiles.size(); ++i)
+#pragma omp parallel for ordered schedule(static, 1)
                   for (const std::pair<std::string, std::string> &lfile :
                        tests_lfiles[i])
-                    _test_datasets[i].add_image_text_file(
-                        lfile.first, lfile.second, _height, _height, alphabet,
-                        max_ocr_length);
+                    CATCH_PARALLEL_EXCEPTION(
+                        _test_datasets[i].add_image_text_file(
+                            lfile.first, lfile.second, alphabet,
+                            max_ocr_length),
+                        eptr);
+
+                dd_utils::rethrow_exception<InputConnectorBadParamException>(
+                    eptr, this->_logger);
 
                 // Write corresp file
                 std::ofstream correspf(_model_repo + "/" + _correspname,
@@ -621,8 +686,12 @@ namespace dd
                       has_test_data = true;
                       break;
                     }
-                if (_test_split > 0.0 && !has_test_data)
+                if (_test_split > 0.0)
                   {
+                    if (has_test_data)
+                      throw InputConnectorBadParamException(
+                          "User specified both a test split "
+                          + std::to_string(_test_split) + " and a test set");
                     tests_lfiles.resize(1);
                     split_dataset<std::vector<double>>(lfiles,
                                                        tests_lfiles[0]);
@@ -631,21 +700,30 @@ namespace dd
                 // Read data
                 if (_db)
                   {
+#pragma omp parallel for ordered schedule(static, 1)
                     for (const std::pair<std::string, std::vector<double>>
                              &lfile : lfiles)
-                      {
-                        _dataset.add_image_file(lfile.first, lfile.second,
-                                                _height, _width);
-                      }
+                      CATCH_PARALLEL_EXCEPTION(
+                          _dataset.add_image_file(lfile.first, lfile.second),
+                          eptr);
+
+                    dd_utils::rethrow_exception<
+                        InputConnectorBadParamException>(eptr, this->_logger);
 
                     // in case of db, alloc of test sets already done in
                     // has_to_create_db
 
                     for (size_t i = 0; i < tests_lfiles.size(); ++i)
+#pragma omp parallel for ordered schedule(static, 1)
                       for (const std::pair<std::string, std::vector<double>>
                                &lfile : tests_lfiles[i])
-                        _test_datasets[i].add_image_file(
-                            lfile.first, lfile.second, _height, _width);
+                        CATCH_PARALLEL_EXCEPTION(
+                            _test_datasets[i].add_image_file(lfile.first,
+                                                             lfile.second),
+                            eptr);
+
+                    dd_utils::rethrow_exception<
+                        InputConnectorBadParamException>(eptr, this->_logger);
                   }
                 else
                   {

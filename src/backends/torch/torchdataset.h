@@ -46,6 +46,8 @@ namespace dd
                                std::vector<at::Tensor>>
       TorchBatch;
 
+  typedef std::vector<torch::Tensor> BatchToStack;
+
   /**
    * \brief dede torch dataset wrapper
    * allows reading from db, controllable randomness ...
@@ -67,6 +69,11 @@ namespace dd
     std::shared_ptr<spdlog::logger> _logger; /**< dd logger */
 
     std::mutex _mutex; /**< lock to keep the dataset synchronized */
+    void dataaug_then_push_back(const cv::Mat &bgr,
+                                const std::vector<torch::Tensor> &t,
+                                const cv::Mat &bw_target,
+                                std::vector<BatchToStack> &data,
+                                std::vector<BatchToStack> &target);
 
   public:
     bool _shuffle = true;            /**< shuffle dataset upon reset() */
@@ -75,6 +82,10 @@ namespace dd
     std::vector<int64_t> _indices;   /**< id/key  of data points */
     std::vector<std::pair<std::string, std::vector<double>>>
         _lfiles; /**< list of files */
+    std::vector<std::pair<std::string, std::string>>
+        _lfilesseg; /**< list of files for segmentation */
+    std::vector<std::pair<std::string, std::string>>
+        _lfilesbbox; /**< list of files for bbox */
 
     std::vector<TorchBatch> _batches; /**< Vector containing the whole dataset
                                          (the "cached data") */
@@ -104,7 +115,8 @@ namespace dd
           _backend(d._backend), _db(d._db),
           _batches_per_transaction(d._batches_per_transaction), _txn(d._txn),
           _logger(d._logger), _shuffle(d._shuffle), _dbData(d._dbData),
-          _indices(d._indices), _lfiles(d._lfiles), _batches(d._batches),
+          _indices(d._indices), _lfiles(d._lfiles), _lfilesseg(d._lfilesseg),
+          _lfilesbbox(d._lfilesbbox), _batches(d._batches),
           _dbFullName(d._dbFullName), _inputc(d._inputc),
           _classification(d._classification), _image(d._image), _bbox(d._bbox),
           _segmentation(d._segmentation), _test(d._test),
@@ -127,12 +139,10 @@ namespace dd
     /**
      * \brief add an encoded image to a batch, with an int target
      */
-    void add_image_batch(const cv::Mat &bgr, const int &width,
-                         const int &height,
+    void add_image_batch(const cv::Mat &bgr,
                          const std::vector<at::Tensor> &targett);
 
-    void add_image_batch(const cv::Mat &bgr, const int &width,
-                         const int &height, const cv::Mat &bw_target);
+    void add_image_batch(const cv::Mat &bgr, const cv::Mat &bw_target);
 
     /**
      * \brief reset dataset reading status : ie start new epoch
@@ -191,7 +201,8 @@ namespace dd
      */
     bool empty() const
     {
-      return (!_db && cache_size() == 0 && _lfiles.empty())
+      return (!_db && cache_size() == 0 && _lfiles.empty()
+              && _lfilesseg.empty())
              || (_db && _dbFullName.empty());
     }
 
@@ -204,11 +215,11 @@ namespace dd
     /**
      * \brief get tensor dims if data #i (of first element of dataset)
      */
-    std::vector<long int> datasize(long int i) const;
+    std::vector<int64_t> datasize(int64_t i) const;
     /**
      * \brief get tensor dims if data #i (of first element of dataset)
      */
-    std::vector<long int> targetsize(long int i) const;
+    std::vector<int64_t> targetsize(int64_t i) const;
 
     /**
      * \brief Returns a batch containing all the cached data
@@ -282,16 +293,14 @@ namespace dd
                         const bool &target = false);
 
     int add_image_file(const std::string &fname,
-                       const std::vector<at::Tensor> &target,
-                       const int &height, const int &width);
+                       const std::vector<at::Tensor> &target);
 
     /**
      * \brief adds image from image filename, with an int target
      * \param width of preprocessed image
      * \param height of preprocessed image
      */
-    int add_image_file(const std::string &fname, const int &target,
-                       const int &height, const int &width);
+    int add_image_file(const std::string &fname, const int &target);
 
     /**
      * \brief adds image from image filename, with a set of regression targets
@@ -299,8 +308,7 @@ namespace dd
      * \param height of preprocessed image
      */
     int add_image_file(const std::string &fname,
-                       const std::vector<double> &target, const int &height,
-                       const int &width);
+                       const std::vector<double> &target);
 
     /**
      * \brief adds image from image filename, with an image as target
@@ -308,8 +316,14 @@ namespace dd
      * \param height of preprocessed image
      */
     int add_image_image_file(const std::string &fname,
-                             const std::string &fname_target,
-                             const int &height, const int &width);
+                             const std::string &fname_target);
+
+    /**
+     * \brief reads image with a bbox list file as target.
+     */
+    int read_image_bbox_file(const std::string &fname,
+                             const std::string &bboxfname, cv::Mat &out_img,
+                             std::vector<at::Tensor> &out_targett);
 
     /**
      * \brief adds image to batch, with a bbox list file as target.
@@ -317,8 +331,7 @@ namespace dd
      * \param height of preprocessed image
      */
     int add_image_bbox_file(const std::string &fname,
-                            const std::string &bboxfname, const int &height,
-                            const int &width);
+                            const std::string &bboxfname);
 
     /**
      * \brief adds image from image filename with a text target (ocr)
@@ -328,7 +341,7 @@ namespace dd
      * \param max_ocr_length maximum possible size of the sequence
      */
     int add_image_text_file(const std::string &fname,
-                            const std::string &target, int height, int width,
+                            const std::string &target,
                             std::unordered_map<uint32_t, int> &alphabet,
                             int max_ocr_length);
 
@@ -339,8 +352,7 @@ namespace dd
      * \param width image width
      * \param target whether the image is a label/target
      */
-    at::Tensor image_to_tensor(const cv::Mat &bgr, const int &height,
-                               const int &width, const bool &target = false);
+    at::Tensor image_to_tensor(const cv::Mat &bgr, const bool &target = false);
 
     /**
      * \brief turns an int into a torch::Tensor

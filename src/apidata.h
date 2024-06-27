@@ -286,6 +286,11 @@ namespace dd
     void toJVal(JDoc &jd, JVal &jv) const;
 
     /**
+     * \brief converts APIData to json string
+     */
+    std::string toJSONString() const;
+
+    /**
      * \brief converts APIData to oat++ DTO
      */
     template <typename T> inline oatpp::Object<T> createSharedDTO() const
@@ -309,7 +314,7 @@ namespace dd
           buffer.GetString());
     }
 
-    template <typename T> static APIData fromDTO(const oatpp::Void &dto)
+    static APIData fromDTO(const oatpp::Void &dto)
     {
       std::shared_ptr<oatpp::data::mapping::ObjectMapper> object_mapper
           = dd::oatpp_utils::createDDMapper();
@@ -556,7 +561,6 @@ namespace dd
     JDoc *_jd = nullptr;
     JVal *_jv = nullptr;
   };
-
 }
 
 #endif
